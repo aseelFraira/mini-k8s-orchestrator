@@ -1,13 +1,34 @@
 """
 Main cluster orchestrator.
 """
+
+import subprocess
 import yaml
 from typing import Dict, List, Any, Optional
 
-from resources import Resource, PodResource, ServiceResource
+from resources import Resource, PodResource, ServiceResource, ReplicaSetResource
 from store import ResourceStore
-from controllers import PodController, ServiceController
+from controllers import PodController, ServiceController, ReplicaSetController
 from api import OrchestratorAPI
+
+# Network name for inter-pod communication
+ORCHESTRATOR_NETWORK = "orchestrator-net"
+
+
+def ensure_network_exists():
+    """Create the orchestrator network if it doesn't exist."""
+    result = subprocess.run(
+        ["podman", "network", "exists", ORCHESTRATOR_NETWORK], capture_output=True
+    )
+    if result.returncode != 0:
+        subprocess.run(
+            ["podman", "network", "create", ORCHESTRATOR_NETWORK],
+            check=True,
+            capture_output=True,
+        )
+        print(f"Created network: {ORCHESTRATOR_NETWORK}")
+    else:
+        print(f"Network {ORCHESTRATOR_NETWORK} already exists")
 
 
 class OrchestratorCluster:
@@ -17,6 +38,7 @@ class OrchestratorCluster:
         self.store = ResourceStore()
         self.pod_controller = None
         self.service_controller = None
+        self.replicaset_controller = None
         self.api = None
         self._started = False
 
@@ -25,6 +47,9 @@ class OrchestratorCluster:
         if self._started:
             return
 
+        # Ensure the orchestrator network exists before starting anything
+        ensure_network_exists()
+
         # Initialize API
         self.pod_controller = PodController(self.store, None)
         self.api = OrchestratorAPI(self.pod_controller, self.store)
@@ -32,10 +57,12 @@ class OrchestratorCluster:
 
         # Initialize controllers
         self.service_controller = ServiceController(self.store, self.pod_controller)
+        self.replicaset_controller = ReplicaSetController(self.store)
 
         # Start controllers
         self.pod_controller.start()
         self.service_controller.start()
+        self.replicaset_controller.start()
 
         self._started = True
         print("Orchestrator cluster started")
@@ -46,6 +73,8 @@ class OrchestratorCluster:
             self.pod_controller.stop()
         if self.service_controller:
             self.service_controller.stop()
+        if self.replicaset_controller:
+            self.replicaset_controller.stop()
         self._started = False
         print("Orchestrator cluster stopped")
 
@@ -70,6 +99,8 @@ class OrchestratorCluster:
             resource = PodResource(name, spec, clean_metadata, ns)
         elif kind == "Service":
             resource = ServiceResource(name, spec, clean_metadata, ns)
+        elif kind == "ReplicaSet":
+            resource = ReplicaSetResource(name, spec, clean_metadata, ns)
         else:
             raise ValueError(f"Unknown resource kind: {kind}")
 

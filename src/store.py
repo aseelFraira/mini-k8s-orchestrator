@@ -14,6 +14,7 @@ class ResourceStore:
         self.resources: Dict[str, Dict[str, Dict[str, Resource]]] = {
             "Pod": {},  # namespace -> name -> resource
             "Service": {},
+            "ReplicaSet": {},
         }
         self.lock = threading.RLock()
 

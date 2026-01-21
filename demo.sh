@@ -86,11 +86,11 @@ start_orchestrator() {
     print_header "Starting Orchestrator"
     
     # Kill any existing orchestrator
-    pkill -f "python.*orchestrator.py" 2>/dev/null || true
+    pkill -f "python.*main.py" 2>/dev/null || true
     sleep 1
     
-    # Start orchestrator in background
-    uv run python3 orchestrator.py --port 3000 &
+    # Start orchestrator in background (using new modular code)
+    uv run python3 src/main.py --port 3000 &
     ORCHESTRATOR_PID=$!
     
     wait_for_orchestrator
@@ -101,7 +101,7 @@ stop_orchestrator() {
     if [ -n "$ORCHESTRATOR_PID" ]; then
         kill $ORCHESTRATOR_PID 2>/dev/null || true
     fi
-    pkill -f "python.*orchestrator.py" 2>/dev/null || true
+    pkill -f "python.*main.py" 2>/dev/null || true
 }
 
 # Trap to ensure cleanup on exit

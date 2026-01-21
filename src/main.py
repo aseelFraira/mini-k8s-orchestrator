@@ -2,6 +2,7 @@
 FastAPI REST API for the orchestrator.
 This is the main entry point for the application.
 """
+
 import uvicorn
 from typing import Dict, List, Any, Optional
 from contextlib import asynccontextmanager
@@ -66,6 +67,7 @@ def resources_list_response(kind: str, resources: List[Resource]) -> Dict[str, A
 # Pod Endpoints
 # =============================================================================
 
+
 @app.post("/api/v1/namespaces/{namespace}/pods")
 async def create_pod(namespace: str, resource: ResourceRequest):
     """Create a Pod"""
@@ -128,6 +130,7 @@ async def update_pod(namespace: str, name: str, resource: ResourceRequest):
 # Service Endpoints
 # =============================================================================
 
+
 @app.post("/api/v1/namespaces/{namespace}/services")
 async def create_service(namespace: str, resource: ResourceRequest):
     """Create a Service"""
@@ -166,6 +169,72 @@ async def delete_service(namespace: str, name: str):
     if cluster.store.delete("Service", name, namespace):
         return {"status": "Success", "message": f"Service {namespace}/{name} deleted"}
     raise HTTPException(404, f"Service {namespace}/{name} not found")
+
+
+# =============================================================================
+# ReplicaSet Endpoints
+# =============================================================================
+
+
+@app.post("/api/v1/namespaces/{namespace}/replicasets")
+async def create_replicaset(namespace: str, resource: ResourceRequest):
+    """Create a ReplicaSet"""
+    if resource.kind != "ReplicaSet":
+        raise HTTPException(400, f"Expected kind ReplicaSet, got {resource.kind}")
+
+    resource_dict = resource.model_dump()
+    resource_dict["metadata"]["namespace"] = namespace
+
+    try:
+        created = cluster.apply_resource(resource_dict, namespace)
+        return JSONResponse(status_code=201, content=resource_response(created))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/v1/namespaces/{namespace}/replicasets")
+async def list_replicasets(namespace: str):
+    """List all ReplicaSets in a namespace"""
+    replicasets = cluster.list_resources("ReplicaSet", namespace)
+    return resources_list_response("ReplicaSet", replicasets)
+
+
+@app.get("/api/v1/namespaces/{namespace}/replicasets/{name}") 
+async def get_replicaset(namespace: str, name: str):
+    """Get a specific ReplicaSet"""
+    rs = cluster.get_resource("ReplicaSet", name, namespace)
+    if not rs:
+        raise HTTPException(404, f"ReplicaSet {namespace}/{name} not found")
+    return resource_response(rs)
+
+
+@app.delete("/api/v1/namespaces/{namespace}/replicasets/{name}")
+async def delete_replicaset(namespace: str, name: str):
+    """Delete a ReplicaSet"""
+    if cluster.store.delete("ReplicaSet", name, namespace):
+        return {
+            "status": "Success",
+            "message": f"ReplicaSet {namespace}/{name} deleted",
+        }
+    raise HTTPException(404, f"ReplicaSet {namespace}/{name} not found")
+
+
+@app.put("/api/v1/namespaces/{namespace}/replicasets/{name}")
+async def update_replicaset(namespace: str, name: str, resource: ResourceRequest):
+    """Update a ReplicaSet"""
+    if resource.kind != "ReplicaSet":
+        raise HTTPException(400, f"Expected kind ReplicaSet, got {resource.kind}")
+
+    existing = cluster.get_resource("ReplicaSet", name, namespace)
+    if not existing:
+        raise HTTPException(404, f"ReplicaSet {namespace}/{name} not found")
+
+    resource_dict = resource.model_dump()
+    resource_dict["metadata"]["namespace"] = namespace
+    resource_dict["metadata"]["name"] = name
+
+    updated = cluster.apply_resource(resource_dict, namespace)
+    return resource_response(updated)
 
 
 # =============================================================================
@@ -226,6 +295,7 @@ async def call_service(namespace: str, name: str, message: Dict[str, Any]):
 # Health and Info Endpoints
 # =============================================================================
 
+
 @app.get("/healthz")
 async def healthz():
     """Health check endpoint"""
@@ -247,6 +317,7 @@ async def list_namespaces():
 # =============================================================================
 # Main
 # =============================================================================
+
 
 def main():
     """Run the orchestrator server"""

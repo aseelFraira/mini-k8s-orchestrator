@@ -33,7 +33,7 @@ curl -X POST https://$ORCHESTRATOR/api/apps/v1/namespaces/default/replicasets \
         "spec": {
             "replicas": 3,
             "selector": {
-                "name": "health"
+                "app": "health"
             },
             "template": {
                 "metadata": {
@@ -49,7 +49,7 @@ curl -X POST https://$ORCHESTRATOR/api/apps/v1/namespaces/default/replicasets \
         }
     }'
 
-curl -X POST https://$ORCHESTRATOR/api/v1/namespaces/default/pods \
+curl -X POST https://$ORCHESTRATOR/api/v1/namespaces/default/services \
     -H "Content-Type: application/json" \
     -d '{
         "apiVersion": "v1",
@@ -104,7 +104,7 @@ curl -X PUT https://$ORCHESTRATOR/api/apps/v1/namespaces/default/replicasets/hea
         "spec": {
             "replicas": 5,
             "selector": {
-                "name": "health"
+                "app": "health"
             },
             "template": {
                 "metadata": {

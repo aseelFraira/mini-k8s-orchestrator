@@ -8,7 +8,7 @@ import time
 import json
 from typing import Dict, List, Optional, TYPE_CHECKING
 
-from resources import PodResource, ServiceResource
+from resources import PodResource, ServiceResource, ReplicaSetResource
 from container import Container
 from store import ResourceStore
 
@@ -200,7 +200,7 @@ class PodController(Controller):
         return containers
 
 
-class ServiceController(Controller): # !! Note: check how does this really work
+class ServiceController(Controller):  # !! Note: check how does
     """
     Controller for Service resources.
     Implements the 'Service Proxy' pattern using Nginx.
@@ -309,3 +309,98 @@ server {{
             "/etc/nginx/conf.d/default.conf",
         ]
         subprocess.run(cmd, input=config_content, text=True, capture_output=True)
+
+
+# NOTE: The ReplicaSetController operates at a different level than the PodController.
+# - PodController: Reconciles the STORE (desired) vs HOST (actual containers on Podman).
+# - ReplicaSetController: Reconciles the REPLICASET SPEC (desired replicas) vs STORE (current pods).
+#
+# This creates a cascading effect:
+#   1. ReplicaSetController ensures N pod resources exist in the store.
+#   2. PodController reacts to store changes and manages actual containers.
+
+
+class ReplicaSetController(Controller):
+    """Controller for ReplicaSet resources."""
+
+    def __init__(self, store: ResourceStore):
+        super().__init__(store)
+
+    def reconcile(self):
+        """Reconcile ReplicaSets - ensure desired number of pods in store"""
+        replicasets = self.store.list("ReplicaSet")
+        for rs in replicasets:
+            try:
+                self._reconcile_replicaset(rs)
+            except Exception as e:
+                print(f"Error reconciling ReplicaSet {rs.name}: {e}")
+
+    def _matches_selector(self, pod: PodResource, selector: Dict[str, str]) -> bool:
+        """Check if a pod's labels match the selector"""
+        pod_labels = pod.labels
+        return all(pod_labels.get(k) == v for k, v in selector.items())
+
+    def _reconcile_replicaset(self, rs: ReplicaSetResource):
+        """Ensure the store has the correct number of pods for this ReplicaSet"""
+        # 1. Find existing pods in STORE that match this ReplicaSet's selector
+        all_pods = self.store.list("Pod", rs.namespace)
+        owned_pods = [p for p in all_pods if self._matches_selector(p, rs.selector)]
+
+        current_count = len(owned_pods)
+        desired_count = rs.replicas
+
+        # Case 1: current pod number < desired count (create missing pods)
+
+        if current_count < desired_count:
+            # Find the next available index
+            existing_indices = set()
+            for pod in owned_pods:
+                # Extract index from name like "my-rs-0"
+                if pod.name.startswith(f"{rs.name}-"):
+                    try:
+                        idx = int(pod.name.split("-")[-1])
+                        existing_indices.add(idx)
+                    except ValueError:
+                        pass
+
+            for i in range(desired_count):
+                if i not in existing_indices:
+                    # Use ReplicaSet name as pod name base
+                    pod_name = f"{rs.name}-{i}"
+                    print(f"Creating pod {pod_name} for ReplicaSet {rs.name}")
+
+                    # Get template spec and labels
+                    template_spec = rs.template.get("spec", {})
+                    template_labels = rs.template.get("metadata", {}).get(
+                        "labels", rs.selector
+                    )
+
+                    pod = PodResource(
+                        name=pod_name,
+                        namespace=rs.namespace,
+                        spec=template_spec,
+                        metadata={"labels": template_labels},
+                    )
+                    self.store.create(pod)
+                    current_count += 1
+
+                    if current_count >= desired_count:
+                        break
+
+        # 3. Delete excess pods from store (highest indices first)
+        elif current_count > desired_count:
+            excess = current_count - desired_count
+            # Sort by index descending to delete highest first
+            pods_to_delete = sorted(
+                owned_pods,
+                key=lambda p: (
+                    int(p.name.split("-")[-1])
+                    if p.name.startswith(f"{rs.name}-")
+                    else 0
+                ),
+                reverse=True,
+            )[:excess]
+
+            for pod in pods_to_delete:
+                print(f"Deleting pod {pod.name} for ReplicaSet {rs.name}")
+                self.store.delete("Pod", pod.name, rs.namespace)

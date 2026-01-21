@@ -155,3 +155,40 @@ class ServiceResource(Resource):
                 }
             ]
         }
+
+
+# ReplicaSet Resource Definition:
+# They are stored in a dict in the store
+# The key is the name of the pod's of the ReplicaSet
+# Each pod gets the name: ReplicaSet_name-Pod_name-index
+
+class ReplicaSetResource(Resource):
+    """ReplicaSet resource definition"""
+
+    def __init__(
+        self,
+        name: str,
+        spec: Dict[str, Any],
+        metadata: Dict[str, Any] = None,
+        namespace: str = "default",
+    ):
+        super().__init__(
+            api_version="v1",
+            kind="ReplicaSet",
+            name=name,
+            namespace=namespace,
+            spec=spec,
+            metadata=metadata or {},
+        )
+
+    @property
+    def replicas(self) -> int:
+        return self.spec.get("replicas", 1)
+
+    @property
+    def selector(self) -> Dict[str, str]:
+        return self.spec.get("selector", {})
+
+    @property
+    def template(self) -> Dict[str, Any]:
+        return self.spec.get("template", {})
