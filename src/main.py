@@ -171,12 +171,30 @@ async def delete_service(namespace: str, name: str):
     raise HTTPException(404, f"Service {namespace}/{name} not found")
 
 
+@app.put("/api/v1/namespaces/{namespace}/services/{name}")
+async def update_service(namespace: str, name: str, resource: ResourceRequest):
+    """Update a Service"""
+    if resource.kind != "Service":
+        raise HTTPException(400, f"Expected kind Service, got {resource.kind}")
+
+    existing = cluster.get_resource("Service", name, namespace)
+    if not existing:
+        raise HTTPException(404, f"Service {namespace}/{name} not found")
+
+    resource_dict = resource.model_dump()
+    resource_dict["metadata"]["namespace"] = namespace
+    resource_dict["metadata"]["name"] = name
+
+    updated = cluster.apply_resource(resource_dict, namespace)
+    return resource_response(updated)
+
+
 # =============================================================================
 # ReplicaSet Endpoints
 # =============================================================================
 
 
-@app.post("/api/v1/namespaces/{namespace}/replicasets")
+@app.post("/api/apps/v1/namespaces/{namespace}/replicasets")
 async def create_replicaset(namespace: str, resource: ResourceRequest):
     """Create a ReplicaSet"""
     if resource.kind != "ReplicaSet":
@@ -192,14 +210,14 @@ async def create_replicaset(namespace: str, resource: ResourceRequest):
         raise HTTPException(400, str(e))
 
 
-@app.get("/api/v1/namespaces/{namespace}/replicasets")
+@app.get("/api/apps/v1/namespaces/{namespace}/replicasets")
 async def list_replicasets(namespace: str):
     """List all ReplicaSets in a namespace"""
     replicasets = cluster.list_resources("ReplicaSet", namespace)
     return resources_list_response("ReplicaSet", replicasets)
 
 
-@app.get("/api/v1/namespaces/{namespace}/replicasets/{name}") 
+@app.get("/api/apps/v1/namespaces/{namespace}/replicasets/{name}")
 async def get_replicaset(namespace: str, name: str):
     """Get a specific ReplicaSet"""
     rs = cluster.get_resource("ReplicaSet", name, namespace)
@@ -208,7 +226,7 @@ async def get_replicaset(namespace: str, name: str):
     return resource_response(rs)
 
 
-@app.delete("/api/v1/namespaces/{namespace}/replicasets/{name}")
+@app.delete("/api/apps/v1/namespaces/{namespace}/replicasets/{name}")
 async def delete_replicaset(namespace: str, name: str):
     """Delete a ReplicaSet"""
     if cluster.store.delete("ReplicaSet", name, namespace):
@@ -219,7 +237,7 @@ async def delete_replicaset(namespace: str, name: str):
     raise HTTPException(404, f"ReplicaSet {namespace}/{name} not found")
 
 
-@app.put("/api/v1/namespaces/{namespace}/replicasets/{name}")
+@app.put("/api/apps/v1/namespaces/{namespace}/replicasets/{name}")
 async def update_replicaset(namespace: str, name: str, resource: ResourceRequest):
     """Update a ReplicaSet"""
     if resource.kind != "ReplicaSet":
@@ -235,60 +253,6 @@ async def update_replicaset(namespace: str, name: str, resource: ResourceRequest
 
     updated = cluster.apply_resource(resource_dict, namespace)
     return resource_response(updated)
-
-
-# =============================================================================
-# Messaging Endpoints
-# =============================================================================
-
-@app.post("/api/v1/namespaces/{namespace}/pods/{name}/send")
-async def send_to_pod(namespace: str, name: str, message: Dict[str, Any]):
-    """Send a message to a Pod"""
-    try:
-        cluster.api.send_to_pod(name, message.get("data"), namespace)
-        return {"status": "Success", "message": "Message sent"}
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-
-
-@app.post("/api/v1/namespaces/{namespace}/pods/{name}/call")
-async def call_pod(namespace: str, name: str, message: Dict[str, Any]):
-    """Send a message to a Pod and wait for response"""
-    try:
-        future = cluster.api.send_to_pod(
-            name, message.get("data"), namespace, expect_response=True
-        )
-        result = future.result(timeout=message.get("timeout", 30))
-        return {"status": "Success", "result": result}
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-    except TimeoutError:
-        raise HTTPException(408, "Request timeout")
-
-
-@app.post("/api/v1/namespaces/{namespace}/services/{name}/send")
-async def send_to_service(namespace: str, name: str, message: Dict[str, Any]):
-    """Send a message to a Service"""
-    try:
-        cluster.api.send_to_service(name, message.get("data"), namespace)
-        return {"status": "Success", "message": "Message sent"}
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-
-
-@app.post("/api/v1/namespaces/{namespace}/services/{name}/call")
-async def call_service(namespace: str, name: str, message: Dict[str, Any]):
-    """Send a message to a Service and wait for response"""
-    try:
-        future = cluster.api.send_to_service(
-            name, message.get("data"), namespace, expect_response=True
-        )
-        result = future.result(timeout=message.get("timeout", 30))
-        return {"status": "Success", "result": result}
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-    except TimeoutError:
-        raise HTTPException(408, "Request timeout")
 
 
 # =============================================================================

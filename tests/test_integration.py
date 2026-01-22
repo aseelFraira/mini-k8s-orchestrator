@@ -227,7 +227,7 @@ class TestReplicaSetAPI:
         client = TestClient(app)
 
         response = client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -249,7 +249,7 @@ class TestReplicaSetAPI:
         assert data["spec"]["replicas"] == 3
 
         # VERIFY STATE CHANGED: ReplicaSet should now be retrievable
-        get_response = client.get("/api/v1/namespaces/default/replicasets/my-rs")
+        get_response = client.get("/api/apps/v1/namespaces/default/replicasets/my-rs")
         assert get_response.status_code == 200
         assert get_response.json()["spec"]["replicas"] == 3
 
@@ -258,7 +258,7 @@ class TestReplicaSetAPI:
         client = TestClient(app)
 
         client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -267,7 +267,7 @@ class TestReplicaSetAPI:
             },
         )
 
-        response = client.get("/api/v1/namespaces/default/replicasets/backend-rs")
+        response = client.get("/api/apps/v1/namespaces/default/replicasets/backend-rs")
 
         assert response.status_code == 200
 
@@ -277,7 +277,7 @@ class TestReplicaSetAPI:
 
         for i in range(2):
             client.post(
-                "/api/v1/namespaces/default/replicasets",
+                "/api/apps/v1/namespaces/default/replicasets",
                 json={
                     "apiVersion": "apps/v1",
                     "kind": "ReplicaSet",
@@ -286,7 +286,7 @@ class TestReplicaSetAPI:
                 },
             )
 
-        response = client.get("/api/v1/namespaces/default/replicasets")
+        response = client.get("/api/apps/v1/namespaces/default/replicasets")
 
         assert response.status_code == 200
         assert len(response.json()["items"]) == 2
@@ -297,7 +297,7 @@ class TestReplicaSetAPI:
 
         # Create with 2 replicas
         client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -308,7 +308,7 @@ class TestReplicaSetAPI:
 
         # Update to 5 replicas
         response = client.put(
-            "/api/v1/namespaces/default/replicasets/scalable",
+            "/api/apps/v1/namespaces/default/replicasets/scalable",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -321,7 +321,7 @@ class TestReplicaSetAPI:
         assert response.json()["spec"]["replicas"] == 5
 
         # VERIFY STATE CHANGED: GET should also return updated value
-        get_response = client.get("/api/v1/namespaces/default/replicasets/scalable")
+        get_response = client.get("/api/apps/v1/namespaces/default/replicasets/scalable")
         assert get_response.json()["spec"]["replicas"] == 5
 
     def test_delete_replicaset_returns_success(self):
@@ -329,7 +329,7 @@ class TestReplicaSetAPI:
         client = TestClient(app)
 
         client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -338,7 +338,7 @@ class TestReplicaSetAPI:
             },
         )
 
-        response = client.delete("/api/v1/namespaces/default/replicasets/temp-rs")
+        response = client.delete("/api/apps/v1/namespaces/default/replicasets/temp-rs")
         assert response.status_code == 200
 
 
@@ -364,7 +364,7 @@ class TestServiceReplicaSetIntegration:
 
         # 1. Create ReplicaSet with app=backend label
         rs_response = client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -399,7 +399,7 @@ class TestServiceReplicaSetIntegration:
         assert svc_response.status_code == 201
 
         # 3. Verify both exist
-        rs_get = client.get("/api/v1/namespaces/default/replicasets/backend-rs")
+        rs_get = client.get("/api/apps/v1/namespaces/default/replicasets/backend-rs")
         svc_get = client.get("/api/v1/namespaces/default/services/backend-svc")
 
         assert rs_get.status_code == 200
@@ -415,7 +415,7 @@ class TestServiceReplicaSetIntegration:
 
         # Create ReplicaSet
         client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -478,7 +478,7 @@ class TestServiceReplicaSetIntegration:
 
         # Create ReplicaSet with 2 replicas
         client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -509,7 +509,7 @@ class TestServiceReplicaSetIntegration:
 
         # Scale up to 5
         client.put(
-            "/api/v1/namespaces/default/replicasets/scale-test",
+            "/api/apps/v1/namespaces/default/replicasets/scale-test",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -544,7 +544,7 @@ class TestServiceReplicaSetIntegration:
 
         # Create two ReplicaSets
         client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -560,7 +560,7 @@ class TestServiceReplicaSetIntegration:
             },
         )
         client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",

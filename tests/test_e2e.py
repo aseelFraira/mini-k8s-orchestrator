@@ -30,7 +30,7 @@ class TestE2EReplicaSet:
         """Create a ReplicaSet and verify pods appear WITHOUT calling any controller."""
         # 1. Create a ReplicaSet via API only
         response = self.client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -68,7 +68,7 @@ class TestE2EReplicaSet:
         """Scale up a ReplicaSet and verify new pods appear."""
         # 1. Create ReplicaSet with 2 replicas
         self.client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -92,7 +92,7 @@ class TestE2EReplicaSet:
 
         # 3. Scale up to 5 via API
         self.client.put(
-            "/api/v1/namespaces/default/replicasets/scale-up-rs",
+            "/api/apps/v1/namespaces/default/replicasets/scale-up-rs",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -118,7 +118,7 @@ class TestE2EReplicaSet:
         """Scale down a ReplicaSet and verify pods are removed."""
         # 1. Create ReplicaSet with 4 replicas
         self.client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -139,7 +139,7 @@ class TestE2EReplicaSet:
 
         # 2. Scale down to 1
         self.client.put(
-            "/api/v1/namespaces/default/replicasets/scale-down-rs",
+            "/api/apps/v1/namespaces/default/replicasets/scale-down-rs",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -165,7 +165,7 @@ class TestE2EReplicaSet:
         """Delete a ReplicaSet and verify pods are eventually removed."""
         # 1. Create ReplicaSet
         self.client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -186,13 +186,13 @@ class TestE2EReplicaSet:
 
         # 2. Delete ReplicaSet
         delete_response = self.client.delete(
-            "/api/v1/namespaces/default/replicasets/deletable-rs"
+            "/api/apps/v1/namespaces/default/replicasets/deletable-rs"
         )
         assert delete_response.status_code == 200
 
         # 3. Verify ReplicaSet is gone
         rs_response = self.client.get(
-            "/api/v1/namespaces/default/replicasets/deletable-rs"
+            "/api/apps/v1/namespaces/default/replicasets/deletable-rs"
         )
         assert rs_response.status_code == 404
 
@@ -225,7 +225,7 @@ class TestE2EServiceWithReplicaSet:
         """
         # 1. Create ReplicaSet for backend
         rs_response = self.client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -315,7 +315,7 @@ class TestE2EServiceWithReplicaSet:
         """Multiple ReplicaSets with different Services - verify isolation."""
         # 1. Create frontend ReplicaSet
         self.client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
@@ -333,7 +333,7 @@ class TestE2EServiceWithReplicaSet:
 
         # 2. Create backend ReplicaSet
         self.client.post(
-            "/api/v1/namespaces/default/replicasets",
+            "/api/apps/v1/namespaces/default/replicasets",
             json={
                 "apiVersion": "apps/v1",
                 "kind": "ReplicaSet",
