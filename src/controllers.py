@@ -61,7 +61,6 @@ class PodController(Controller):
     def __init__(self, store: ResourceStore, api_client: "OrchestratorAPI"):
         super().__init__(store)
         self.api_client = api_client
-        self.lock = threading.RLock()
 
     def _container_key(self, namespace: str, name: str) -> str:
         return f"{namespace}_{name}"
@@ -106,55 +105,54 @@ class PodController(Controller):
 
     def reconcile(self):
         """Ensure host state matches store state"""
-        with self.lock:
-            # 1. Gather Desired State (Store)
-            desired_pods = {
-                self._container_key(p.namespace, p.name): p
-                for p in self.store.list("Pod")
-            }
+        # 1. Gather Desired State (Store)
+        desired_pods = {
+            self._container_key(p.namespace, p.name): p
+            for p in self.store.list("Pod")
+        }
 
-            # 2. Gather Actual State (Podman)
-            actual_state = self.get_actual_state()
+        # 2. Gather Actual State (Podman)
+        actual_state = self.get_actual_state()
 
-            # 3. Stop containers that are not in desired state (Orphans)
-            for pod_key, containers_info in actual_state.items():
-                if pod_key not in desired_pods:
-                    print(f"Cleaning up orphaned pod: {pod_key}")
-                    for c in containers_info:
-                        Container(full_name=c["full_name"]).stop()
+        # 3. Stop containers that are not in desired state (Orphans)
+        for pod_key, containers_info in actual_state.items():
+            if pod_key not in desired_pods:
+                print(f"Cleaning up orphaned pod: {pod_key}")
+                for c in containers_info:
+                    Container(full_name=c["full_name"]).stop()
 
-            # 4. SYNC & REPAIR
-            for key, pod in desired_pods.items():
-                host_containers = actual_state.get(key, [])
-                host_map = {c["c_name"]: c for c in host_containers}
+        # 4. SYNC & REPAIR
+        for key, pod in desired_pods.items():
+            host_containers = actual_state.get(key, [])
+            host_map = {c["c_name"]: c for c in host_containers}
 
-                for spec in pod.containers:
-                    c_name = spec.get("name")
-                    c_info = host_map.get(c_name)
-
-                    if not c_info:
-                        print(f"Starting missing container {c_name} for pod {key}")
-                        Container(pod=pod, container_name=c_name).start()
-                    elif not c_info["is_running"]:
-                        Container(full_name=c_info["full_name"]).stop()
-                        Container(pod=pod, container_name=c_name).start()
-
-            # 5. Hash check for spec changes
-            for key, pod in desired_pods.items():
-                if not pod.containers:
-                    continue
-                c_name = pod.containers[0].get("name")
-                host_containers = actual_state.get(key, [])
-                host_map = {c["c_name"]: c for c in host_containers}
+            for spec in pod.containers:
+                c_name = spec.get("name")
                 c_info = host_map.get(c_name)
 
-                if c_info and c_info["is_running"]:
-                    shadow = Container(full_name=c_info["full_name"])
-                    actual_hash = shadow.get_label("pod-hash-number")
-                    if actual_hash != pod.spec_hash:
-                        print(f"Pod spec changed for {key}, recreating...")
-                        for c in host_containers:
-                            Container(full_name=c["full_name"]).stop()
+                if not c_info:
+                    print(f"Starting missing container {c_name} for pod {key}")
+                    Container(pod=pod, container_name=c_name).start()
+                elif not c_info["is_running"]:
+                    Container(full_name=c_info["full_name"]).stop()
+                    Container(pod=pod, container_name=c_name).start()
+
+        # 5. Hash check for spec changes
+        for key, pod in desired_pods.items():
+            if not pod.containers:
+                continue
+            c_name = pod.containers[0].get("name")
+            host_containers = actual_state.get(key, [])
+            host_map = {c["c_name"]: c for c in host_containers}
+            c_info = host_map.get(c_name)
+
+            if c_info and c_info["is_running"]:
+                shadow = Container(full_name=c_info["full_name"])
+                actual_hash = shadow.get_label("pod-hash-number")
+                if actual_hash != pod.spec_hash:
+                    print(f"Pod spec changed for {key}, recreating...")
+                    for c in host_containers:
+                        Container(full_name=c["full_name"]).stop()
 
     def get_container(
         self, name: str, namespace: str = "default"
