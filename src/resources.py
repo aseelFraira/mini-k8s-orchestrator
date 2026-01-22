@@ -145,6 +145,13 @@ class ServiceResource(Resource):
         # This allows curl http://health:2000 to reach the service
         aliases = list(self.selector.values()) if self.selector else [self.name]
 
+        # Get the service port for host exposure
+        host_ports = []
+        for port_mapping in self.ports:
+            port = port_mapping.get("port")
+            if port:
+                host_ports.append(port)
+
         return {
             "containers": [
                 {
@@ -152,6 +159,7 @@ class ServiceResource(Resource):
                     "image": "nginx:alpine",
                     "env": {},
                     "network_aliases": aliases,
+                    "ports": host_ports,
                 }
             ]
         }
@@ -162,6 +170,8 @@ class ServiceResource(Resource):
 # The key is the name of the pod's of the ReplicaSet
 # Each pod gets the name: ReplicaSet_name-Pod_name-index
 
+
+@dataclass
 class ReplicaSetResource(Resource):
     """ReplicaSet resource definition"""
 
@@ -173,7 +183,7 @@ class ReplicaSetResource(Resource):
         namespace: str = "default",
     ):
         super().__init__(
-            api_version="v1",
+            api_version="apps/v1",
             kind="ReplicaSet",
             name=name,
             namespace=namespace,

@@ -29,6 +29,7 @@ class Container:
             self.labels = pod.metadata.get("labels", {})
             self.hash_number = pod.spec_hash
             self.network_aliases = container_specs.get("network_aliases", [])
+            self.ports = container_specs.get("ports", [])
 
         # Cleanup Case: Creating a "Shadow" object from Podman data
         elif full_name:
@@ -39,6 +40,7 @@ class Container:
             self.env = {}
             self.labels = {}
             self.network_aliases = []
+            self.ports = []
 
         else:
             raise ValueError("Must provide either (pod and container_name) or (full_name)")
@@ -67,6 +69,13 @@ class Container:
         # Network aliases
         for alias in self.network_aliases:
             cmd.extend(["--network-alias", alias])
+
+        # Pod name as alias for direct pod-to-pod communication
+        cmd.extend(["--network-alias", self.pod_name])
+
+        # Host port exposure (for Services)
+        for port in self.ports:
+            cmd.extend(["-p", f"{port}:{port}"])
 
         # Orchestrator Labels - for management
         cmd.extend(["--label", "managed-by=my-orchestrator"])
