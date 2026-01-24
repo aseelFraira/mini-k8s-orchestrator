@@ -9,7 +9,7 @@ from typing import Dict, List, Any, Optional
 from resources import Resource, PodResource, ServiceResource, ReplicaSetResource
 from store import ResourceStore
 from controllers import PodController, ServiceController, ReplicaSetController
-from api import OrchestratorAPI
+
 
 # Network name for inter-pod communication
 ORCHESTRATOR_NETWORK = "orchestrator-net"
@@ -39,7 +39,6 @@ class OrchestratorCluster:
         self.pod_controller = None
         self.service_controller = None
         self.replicaset_controller = None
-        self.api = None
         self._started = False
 
     def start(self):
@@ -50,12 +49,8 @@ class OrchestratorCluster:
         # Ensure the orchestrator network exists before starting anything
         ensure_network_exists()
 
-        # Initialize API
-        self.pod_controller = PodController(self.store, None)
-        self.api = OrchestratorAPI(self.pod_controller, self.store)
-        self.pod_controller.api_client = self.api
-
         # Initialize controllers
+        self.pod_controller = PodController(self.store)
         self.service_controller = ServiceController(self.store, self.pod_controller)
         self.replicaset_controller = ReplicaSetController(self.store)
 
