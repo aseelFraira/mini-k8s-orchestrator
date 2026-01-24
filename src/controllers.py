@@ -6,14 +6,11 @@ import subprocess
 import threading
 import time
 import json
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional
 
 from resources import PodResource, ServiceResource, ReplicaSetResource
 from container import Container
 from store import ResourceStore
-
-if TYPE_CHECKING:
-    from api import OrchestratorAPI
 
 
 class Controller:
@@ -58,9 +55,8 @@ class Controller:
 class PodController(Controller):
     """Controller for Pod resources"""
 
-    def __init__(self, store: ResourceStore, api_client: "OrchestratorAPI"):
+    def __init__(self, store: ResourceStore):
         super().__init__(store)
-        self.api_client = api_client
 
     def _container_key(self, namespace: str, name: str) -> str:
         return f"{namespace}_{name}"
@@ -153,6 +149,45 @@ class PodController(Controller):
                     for c in host_containers:
                         Container(full_name=c["full_name"]).stop()
 
+        # 6. Update status for all pods (reuse actual_state, good enough for status)
+        for key, pod in desired_pods.items():
+            host_containers = actual_state.get(key, [])
+            self._update_pod_status(pod, host_containers)
+
+    def _update_pod_status(self, pod: PodResource, host_containers: List[Dict]):
+        """Update pod status based on actual container state"""
+        container_statuses = []
+        all_running = True
+        any_running = False
+
+        host_map = {c["c_name"]: c for c in host_containers}
+
+        for spec in pod.containers:
+            c_name = spec.get("name")
+            c_info = host_map.get(c_name)
+
+            if c_info and c_info["is_running"]:
+                container_statuses.append({"name": c_name, "ready": True, "state": "running"})
+                any_running = True
+            else:
+                container_statuses.append({"name": c_name, "ready": False, "state": "waiting"})
+                all_running = False
+
+        # Determine phase
+        if not pod.containers:
+            phase = "Pending"
+        elif all_running:
+            phase = "Running"
+        elif any_running:
+            phase = "Running"  # Partially running
+        else:
+            phase = "Pending"
+
+        pod.status = {
+            "phase": phase,
+            "containerStatuses": container_statuses,
+        }
+
     def get_container(
         self, name: str, namespace: str = "default"
     ) -> Optional[Container]:
@@ -197,7 +232,7 @@ class PodController(Controller):
         return containers
 
 
-class ServiceController(Controller):  # !! Note: check how does
+class ServiceController(Controller):
     """
     Controller for Service resources.
     Implements the 'Service Proxy' pattern using Nginx.
@@ -245,6 +280,7 @@ class ServiceController(Controller):  # !! Note: check how does
                 },
             )
             self.store.create(pod)
+            service.status = {"readyBackends": 0, "phase": "Pending"}
             return
 
         # 2. Get the running proxy container
@@ -252,6 +288,7 @@ class ServiceController(Controller):  # !! Note: check how does
             proxy_pod_name, service.namespace
         )
         if not proxy_container:
+            service.status = {"readyBackends": 0, "phase": "Pending"}
             return
 
         # 3. Find backend pods
@@ -269,6 +306,12 @@ class ServiceController(Controller):  # !! Note: check how does
         nginx_conf = self._generate_nginx_config(service, pod_ips)
         self._inject_config(proxy_container, nginx_conf)
         proxy_container.exec_command(["nginx", "-s", "reload"])
+
+        # 5. Update service status
+        service.status = {
+            "readyBackends": len(pod_ips),
+            "phase": "Active" if pod_ips else "NoBackends",
+        }
 
     def _generate_nginx_config(
         self, service: ServiceResource, pod_ips: List[str]
@@ -372,8 +415,7 @@ class ReplicaSetController(Controller):
         current_count = len(owned_pods)
         desired_count = rs.replicas
 
-        # Case 1: current pod number < desired count (create missing pods)
-
+        # Scale up: create missing pods
         if current_count < desired_count:
             # Find the next available index
             existing_indices = set()
@@ -413,7 +455,7 @@ class ReplicaSetController(Controller):
                     if current_count >= desired_count:
                         break
 
-        # 3. Delete excess pods from store
+        # Scale down: delete excess pods
         elif current_count > desired_count:
             excess = current_count - desired_count
             # Filter to only pods owned by THIS ReplicaSet (using metadata, not name parsing)
@@ -426,3 +468,14 @@ class ReplicaSetController(Controller):
             for pod in pods_to_delete:
                 print(f"Deleting pod {pod.name} for ReplicaSet {rs.name}")
                 self.store.delete("Pod", pod.name, rs.namespace)
+
+        # Update ReplicaSet status
+        all_pods = self.store.list("Pod", rs.namespace)
+        owned_pods = [p for p in all_pods if self._matches_selector(p, rs.selector)]
+        ready_pods = [p for p in owned_pods if p.status.get("phase") == "Running"]
+
+        rs.status = {
+            "replicas": len(owned_pods),
+            "readyReplicas": len(ready_pods),
+            "availableReplicas": len(ready_pods),
+        }

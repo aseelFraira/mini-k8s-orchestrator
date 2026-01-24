@@ -12,6 +12,7 @@ from enum import Enum
 class ResourceType(Enum):
     POD = "pod"
     SERVICE = "service"
+    REPLICASET = "replicaset"
 
 
 @dataclass
@@ -163,12 +164,6 @@ class ServiceResource(Resource):
                 }
             ]
         }
-
-
-# ReplicaSet Resource Definition:
-# They are stored in a dict in the store
-# The key is the name of the pod's of the ReplicaSet
-# Each pod gets the name: ReplicaSet_name-Pod_name-index
 
 
 @dataclass

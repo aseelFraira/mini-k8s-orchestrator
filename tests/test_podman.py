@@ -30,13 +30,8 @@ def podman_available():
 
 
 def cleanup_test_containers():
-    """Remove all test containers and pods."""
-    # Remove all pods managed by our orchestrator
-    subprocess.run(
-        ["podman", "pod", "rm", "-f", "-a", "--filter", "label=managed-by=my-orchestrator"],
-        capture_output=True,
-    )
-    # Remove any stray containers
+    """Remove all test containers."""
+    # Remove all containers managed by our orchestrator
     subprocess.run(
         ["podman", "rm", "-f", "-a", "--filter", "label=managed-by=my-orchestrator"],
         capture_output=True,
@@ -60,8 +55,8 @@ def reset_state():
 class TestPodmanContainers:
     """Tests that verify actual Podman containers are created."""
 
-    def test_pod_creates_podman_pod(self):
-        """Verify creating a Pod resource creates a Podman pod."""
+    def test_pod_creates_podman_container(self):
+        """Verify creating a Pod resource creates a Podman container."""
         with TestClient(app) as client:
             # Create a pod via API
             response = client.post(
@@ -82,12 +77,17 @@ class TestPodmanContainers:
             # Wait for PodController to reconcile
             time.sleep(3)
 
-            # Check Podman pod exists
+            # Check Podman container exists
             result = subprocess.run(
-                ["podman", "pod", "exists", "default_test-podman-pod"],
+                [
+                    "podman", "ps", "-a",
+                    "--filter", "name=default_test-podman-pod_nginx",
+                    "--format", "{{.Names}}"
+                ],
                 capture_output=True,
+                text=True,
             )
-            assert result.returncode == 0, "Podman pod was not created"
+            assert "default_test-podman-pod_nginx" in result.stdout, "Podman container was not created"
 
     def test_pod_creates_container_inside_pod(self):
         """Verify container runs inside the Podman pod."""
@@ -151,8 +151,8 @@ class TestPodmanContainers:
             )
             assert result.stdout.strip() == "labeled-pod"
 
-    def test_delete_pod_removes_podman_pod(self):
-        """Verify deleting a Pod removes the Podman pod."""
+    def test_delete_pod_removes_podman_container(self):
+        """Verify deleting a Pod removes the Podman container."""
         with TestClient(app) as client:
             # Create
             client.post(
@@ -170,23 +170,33 @@ class TestPodmanContainers:
             )
             time.sleep(3)
 
-            # Verify it exists
+            # Verify container exists
             result = subprocess.run(
-                ["podman", "pod", "exists", "default_deletable"],
+                [
+                    "podman", "ps", "-a",
+                    "--filter", "name=default_deletable_app",
+                    "--format", "{{.Names}}"
+                ],
                 capture_output=True,
+                text=True,
             )
-            assert result.returncode == 0
+            assert "default_deletable_app" in result.stdout
 
             # Delete via API
             client.delete("/api/v1/namespaces/default/pods/deletable")
             time.sleep(3)
 
-            # Verify it's gone
+            # Verify container is gone
             result = subprocess.run(
-                ["podman", "pod", "exists", "default_deletable"],
+                [
+                    "podman", "ps", "-a",
+                    "--filter", "name=default_deletable_app",
+                    "--format", "{{.Names}}"
+                ],
                 capture_output=True,
+                text=True,
             )
-            assert result.returncode != 0, "Podman pod still exists after deletion"
+            assert "default_deletable_app" not in result.stdout, "Podman container still exists after deletion"
 
 
 @pytest.mark.skipif(not podman_available(), reason="Podman not available")
@@ -232,8 +242,8 @@ class TestPodmanReconciliation:
             )
             assert result.stdout.strip() == "true", "Container was not restarted"
 
-    def test_reconciliation_removes_orphaned_pods(self):
-        """Pods not in store should be cleaned up."""
+    def test_reconciliation_removes_orphaned_containers(self):
+        """Containers not in store should be cleaned up."""
         with TestClient(app) as client:
             # Create pod
             client.post(
@@ -251,12 +261,17 @@ class TestPodmanReconciliation:
             )
             time.sleep(3)
 
-            # Verify pod exists
+            # Verify container exists
             result = subprocess.run(
-                ["podman", "pod", "exists", "default_orphan-test"],
+                [
+                    "podman", "ps", "-a",
+                    "--filter", "name=default_orphan-test_app",
+                    "--format", "{{.Names}}"
+                ],
                 capture_output=True,
+                text=True,
             )
-            assert result.returncode == 0
+            assert "default_orphan-test_app" in result.stdout
 
             # Delete from store directly (simulating inconsistency)
             cluster.store.delete("Pod", "orphan-test", "default")
@@ -264,20 +279,25 @@ class TestPodmanReconciliation:
             # Wait for reconciliation
             time.sleep(3)
 
-            # Podman pod should be removed
+            # Podman container should be removed
             result = subprocess.run(
-                ["podman", "pod", "exists", "default_orphan-test"],
+                [
+                    "podman", "ps", "-a",
+                    "--filter", "name=default_orphan-test_app",
+                    "--format", "{{.Names}}"
+                ],
                 capture_output=True,
+                text=True,
             )
-            assert result.returncode != 0, "Orphaned pod was not cleaned up"
+            assert "default_orphan-test_app" not in result.stdout, "Orphaned container was not cleaned up"
 
 
 @pytest.mark.skipif(not podman_available(), reason="Podman not available")
 class TestPodmanNetworking:
     """Tests for inter-pod networking."""
 
-    def test_pod_has_network_alias(self):
-        """Verify pod gets network alias for DNS resolution."""
+    def test_container_on_orchestrator_network(self):
+        """Verify container is on the orchestrator network."""
         with TestClient(app) as client:
             client.post(
                 "/api/v1/namespaces/default/pods",
@@ -294,19 +314,18 @@ class TestPodmanNetworking:
             )
             time.sleep(3)
 
-            # Check pod has network alias
-            # The infra container of the pod should have the alias
+            # Check container is on orchestrator network
             result = subprocess.run(
                 [
-                    "podman", "pod", "inspect",
-                    "default_aliased-pod",
-                    "--format", "{{.InfraConfig.Networks}}"
+                    "podman", "inspect",
+                    "default_aliased-pod_app",
+                    "--format", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}"
                 ],
                 capture_output=True,
                 text=True,
             )
-            # The pod should be on the orchestrator network
-            assert "orchestrator-net" in result.stdout or result.returncode == 0
+            # The container should be on the orchestrator network
+            assert "orchestrator-net" in result.stdout, f"Container not on orchestrator-net: {result.stdout}"
 
     def test_pods_can_communicate_by_name(self):
         """Test that one pod can reach another by name."""
@@ -374,8 +393,8 @@ class TestPodmanNetworking:
 class TestPodmanReplicaSet:
     """Tests for ReplicaSet with actual containers."""
 
-    def test_replicaset_creates_multiple_pods(self):
-        """Verify ReplicaSet creates multiple Podman pods."""
+    def test_replicaset_creates_multiple_containers(self):
+        """Verify ReplicaSet creates multiple Podman containers."""
         with TestClient(app) as client:
             client.post(
                 "/api/apps/v1/namespaces/default/replicasets",
@@ -401,21 +420,21 @@ class TestPodmanReplicaSet:
             # Wait for reconciliation
             time.sleep(5)
 
-            # Check 3 Podman pods exist
+            # Check 3 Podman containers exist
             result = subprocess.run(
                 [
-                    "podman", "pod", "ps",
+                    "podman", "ps",
                     "--filter", "label=managed-by=my-orchestrator",
-                    "--format", "{{.Name}}"
+                    "--format", "{{.Names}}"
                 ],
                 capture_output=True,
                 text=True,
             )
-            pods = [p for p in result.stdout.strip().split("\n") if p.startswith("default_multi-rs-")]
-            assert len(pods) == 3, f"Expected 3 pods, got {len(pods)}: {pods}"
+            containers = [c for c in result.stdout.strip().split("\n") if c.startswith("default_multi-rs-")]
+            assert len(containers) == 3, f"Expected 3 containers, got {len(containers)}: {containers}"
 
-    def test_replicaset_scale_creates_new_pods(self):
-        """Verify scaling up creates new Podman pods."""
+    def test_replicaset_scale_creates_new_containers(self):
+        """Verify scaling up creates new Podman containers."""
         with TestClient(app) as client:
             # Create with 1 replica
             client.post(
@@ -463,26 +482,26 @@ class TestPodmanReplicaSet:
             )
             time.sleep(4)
 
-            # Verify 3 Podman pods
+            # Verify 3 Podman containers
             result = subprocess.run(
                 [
-                    "podman", "pod", "ps",
+                    "podman", "ps",
                     "--filter", "label=managed-by=my-orchestrator",
-                    "--format", "{{.Name}}"
+                    "--format", "{{.Names}}"
                 ],
                 capture_output=True,
                 text=True,
             )
-            pods = [p for p in result.stdout.strip().split("\n") if p.startswith("default_scale-rs-")]
-            assert len(pods) == 3
+            containers = [c for c in result.stdout.strip().split("\n") if c.startswith("default_scale-rs-")]
+            assert len(containers) == 3
 
 
 @pytest.mark.skipif(not podman_available(), reason="Podman not available")
 class TestPodmanService:
     """Tests for Service with actual nginx proxy."""
 
-    def test_service_creates_proxy_pod(self):
-        """Verify Service creates an nginx proxy pod."""
+    def test_service_creates_proxy_container(self):
+        """Verify Service creates an nginx proxy container."""
         with TestClient(app) as client:
             # Create backend pods first
             client.post(
@@ -523,12 +542,17 @@ class TestPodmanService:
             # Wait for reconciliation
             time.sleep(5)
 
-            # Check proxy pod exists
+            # Check proxy container exists
             result = subprocess.run(
-                ["podman", "pod", "exists", "default_proxy-backend-svc"],
+                [
+                    "podman", "ps", "-a",
+                    "--filter", "name=default_proxy-backend-svc_nginx",
+                    "--format", "{{.Names}}"
+                ],
                 capture_output=True,
+                text=True,
             )
-            assert result.returncode == 0, "Proxy pod was not created"
+            assert "default_proxy-backend-svc_nginx" in result.stdout, "Proxy container was not created"
 
     def test_service_host_port_accessible(self):
         """Verify Service is accessible from host via published port."""
