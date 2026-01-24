@@ -141,9 +141,9 @@ class ServiceResource(Resource):
     @property
     def proxy_pod_spec(self) -> Dict[str, Any]:
         """Returns the full Pod spec for the Nginx shadow pod"""
-        # Network alias should be the selector value (e.g., 'health' from {'app': 'health'})
-        # This allows curl http://health:2000 to reach the service
-        aliases = list(self.selector.values()) if self.selector else [self.name]
+        # Network alias is the SERVICE NAME (e.g., 'health-service')
+        # This allows: curl http://health-service:2000 to reach the load balancer
+        aliases = [self.name]
 
         # Get the service port for host exposure
         host_ports = []

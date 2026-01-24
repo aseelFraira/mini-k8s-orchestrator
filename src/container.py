@@ -1,6 +1,7 @@
 """
 Container runtime for the orchestrator.
 """
+
 import subprocess
 from typing import List, Optional
 
@@ -14,7 +15,9 @@ class Container:
             container_specs = pod.get_container_spec(container_name)
 
             if not container_specs:
-                raise ValueError(f"Container {container_name} not found in pod {pod.name}")
+                raise ValueError(
+                    f"Container {container_name} not found in pod {pod.name}"
+                )
 
             self.container_name = container_name
             self.namespace = pod.namespace
@@ -43,10 +46,11 @@ class Container:
             self.ports = []
 
         else:
-            raise ValueError("Must provide either (pod and container_name) or (full_name)")
+            raise ValueError(
+                "Must provide either (pod and container_name) or (full_name)"
+            )
 
         self.running = False
-        
 
     def start(self):
         """Starts the container with full metadata and environment."""
@@ -71,7 +75,7 @@ class Container:
             cmd.extend(["--network-alias", alias])
 
         # Pod name as alias for direct pod-to-pod communication
-        cmd.extend(["--network-alias", self.pod_name])
+        cmd.extend(["--network-alias", self.pod_name])  # https::/podname:2000
 
         # Host port exposure (for Services)
         for port in self.ports:
@@ -118,9 +122,11 @@ class Container:
     def get_label(self, label_name: str):
         """Get a label value from the container."""
         cmd = [
-            "podman", "inspect", 
-            "-f", f'{{{{index .Config.Labels "{label_name}"}}}}', 
-            self.full_name
+            "podman",
+            "inspect",
+            "-f",
+            f'{{{{index .Config.Labels "{label_name}"}}}}',
+            self.full_name,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:

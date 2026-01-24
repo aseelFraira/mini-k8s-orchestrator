@@ -107,8 +107,7 @@ class PodController(Controller):
         """Ensure host state matches store state"""
         # 1. Gather Desired State (Store)
         desired_pods = {
-            self._container_key(p.namespace, p.name): p
-            for p in self.store.list("Pod")
+            self._container_key(p.namespace, p.name): p for p in self.store.list("Pod")
         }
 
         # 2. Gather Actual State (Podman)
@@ -211,6 +210,19 @@ class ServiceController(Controller):  # !! Note: check how does
     def reconcile(self):
         """Reconcile services - create proxy pods and update configs"""
         services = self.store.list("Service")
+        existing_service_names = {svc.name for svc in services}
+
+        # Delete proxy pods whose owner service no longer exists
+        all_pods = self.store.list("Pod")
+        for pod in all_pods:
+            owner_service_name = pod.labels.get("service-name")
+            if owner_service_name and owner_service_name not in existing_service_names:
+                print(
+                    f"Cleaning up orphaned proxy pod: {pod.name} (owner Service '{owner_service_name}' deleted)"
+                )
+                self.store.delete("Pod", pod.name, pod.namespace)
+
+        # Reconcile each service
         for service in services:
             try:
                 self._reconcile_service(service)
@@ -229,7 +241,7 @@ class ServiceController(Controller):  # !! Note: check how does
                 namespace=service.namespace,
                 spec=service.proxy_pod_spec,
                 metadata={
-                    "labels": {"role": "service-proxy", "service-name": service.name}
+                    "labels": {"role": "service-proxy", "service-name": service.name},
                 },
             )
             self.store.create(pod)
@@ -327,6 +339,19 @@ class ReplicaSetController(Controller):
     def reconcile(self):
         """Reconcile ReplicaSets - ensure desired number of pods in store"""
         replicasets = self.store.list("ReplicaSet")
+        existing_rs_names = {rs.name for rs in replicasets}
+
+        # Delete pods whose owner ReplicaSet no longer exists
+        all_pods = self.store.list("Pod")
+        for pod in all_pods:
+            owner_rs_name = pod.metadata.get("owner-replicaset")
+            if owner_rs_name and owner_rs_name not in existing_rs_names:
+                print(
+                    f"Cleaning up orphaned pod: {pod.name} (owner RS '{owner_rs_name}' deleted)"
+                )
+                self.store.delete("Pod", pod.name, pod.namespace)
+
+        # Reconcile each ReplicaSet
         for rs in replicasets:
             try:
                 self._reconcile_replicaset(rs)
@@ -377,7 +402,10 @@ class ReplicaSetController(Controller):
                         name=pod_name,
                         namespace=rs.namespace,
                         spec=template_spec,
-                        metadata={"labels": template_labels},
+                        metadata={
+                            "labels": template_labels,
+                            "owner-replicaset": rs.name,
+                        },
                     )
                     self.store.create(pod)
                     current_count += 1
@@ -385,19 +413,15 @@ class ReplicaSetController(Controller):
                     if current_count >= desired_count:
                         break
 
-        # 3. Delete excess pods from store (highest indices first)
+        # 3. Delete excess pods from store
         elif current_count > desired_count:
             excess = current_count - desired_count
-            # Sort by index descending to delete highest first
-            pods_to_delete = sorted(
-                owned_pods,
-                key=lambda p: (
-                    int(p.name.split("-")[-1])
-                    if p.name.startswith(f"{rs.name}-")
-                    else 0
-                ),
-                reverse=True,
-            )[:excess]
+            # Filter to only pods owned by THIS ReplicaSet (using metadata, not name parsing)
+            rs_owned_pods = [
+                p for p in owned_pods if p.metadata.get("owner-replicaset") == rs.name
+            ]
+            # Delete the excess (just pick any, order doesn't matter for correctness)
+            pods_to_delete = rs_owned_pods[:excess]
 
             for pod in pods_to_delete:
                 print(f"Deleting pod {pod.name} for ReplicaSet {rs.name}")
