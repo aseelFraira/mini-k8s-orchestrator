@@ -1,0 +1,110 @@
+nohup: ignoring input
+INFO:     Started server process [1929644]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:3000 (Press CTRL+C to quit)
+Starting Orchestrator API on 0.0.0.0:3000
+Network orchestrator-net already exists
+Orchestrator cluster started
+Cleaning up orphaned pod: default_web-rs-0
+Successfully removed container: default_web-rs-0_nginx
+Cleaning up orphaned pod: default_caller-alpha
+Successfully removed container: default_caller-alpha_client
+Cleaning up orphaned pod: default_caller-beta
+Successfully removed container: default_caller-beta_client
+Cleaning up orphaned pod: default_proxy-web-svc
+Successfully removed container: default_proxy-web-svc_nginx
+INFO:     127.0.0.1:42828 - "POST /api/apps/v1/namespaces/default/replicasets HTTP/1.1" 201 Created
+INFO:     127.0.0.1:42838 - "POST /api/v1/namespaces/default/services HTTP/1.1" 201 Created
+INFO:     127.0.0.1:42850 - "POST /api/v1/namespaces/default/pods HTTP/1.1" 201 Created
+Creating proxy pod for stress-svc
+Creating pod stress-rs-0 for ReplicaSet stress-rs
+Creating pod stress-rs-1 for ReplicaSet stress-rs
+Creating pod stress-rs-2 for ReplicaSet stress-rs
+Starting missing container client for pod default_tester
+Successfully removed container: default_tester_client
+Executing: podman run -d --name default_tester_client --network orchestrator-net --network-alias tester --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=tester --label orchestrator-container-name=client --label pod-hash-number=13343515ac82a728b8bcaa1f6fddeafe717f04737c3eaca3eed4c0cb89f0e9ab docker.io/library/nginx:alpine
+Starting missing container nginx for pod default_proxy-stress-svc
+Successfully removed container: default_proxy-stress-svc_nginx
+Executing: podman run -d --name default_proxy-stress-svc_nginx --network orchestrator-net --network-alias stress-svc --network-alias proxy-stress-svc -p 8888:8888 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=proxy-stress-svc --label orchestrator-container-name=nginx --label pod-hash-number=0c3c80349e8ff4f4892044f3ad417deec17e8842e5fa59ed620fc7e05624e1b7 --label role=service-proxy --label service-name=stress-svc nginx:alpine
+Starting missing container web for pod default_stress-rs-0
+Successfully removed container: default_stress-rs-0_web
+Executing: podman run -d --name default_stress-rs-0_web --network orchestrator-net --network-alias stress-rs-0 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-0 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+Starting missing container web for pod default_stress-rs-1
+Successfully removed container: default_stress-rs-1_web
+Executing: podman run -d --name default_stress-rs-1_web --network orchestrator-net --network-alias stress-rs-1 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-1 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+Starting missing container web for pod default_stress-rs-2
+Successfully removed container: default_stress-rs-2_web
+Executing: podman run -d --name default_stress-rs-2_web --network orchestrator-net --network-alias stress-rs-2 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-2 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+Service stress-svc configuration changed. Reloading Nginx...
+Service stress-svc configuration changed. Reloading Nginx...
+Service stress-svc configuration changed. Reloading Nginx...
+Starting missing container web for pod default_stress-rs-1
+Successfully removed container: default_stress-rs-1_web
+Executing: podman run -d --name default_stress-rs-1_web --network orchestrator-net --network-alias stress-rs-1 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-1 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+Service stress-svc configuration changed. Reloading Nginx...
+Starting missing container nginx for pod default_proxy-stress-svc
+Successfully removed container: default_proxy-stress-svc_nginx
+Executing: podman run -d --name default_proxy-stress-svc_nginx --network orchestrator-net --network-alias stress-svc --network-alias proxy-stress-svc -p 8888:8888 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=proxy-stress-svc --label orchestrator-container-name=nginx --label pod-hash-number=0c3c80349e8ff4f4892044f3ad417deec17e8842e5fa59ed620fc7e05624e1b7 --label role=service-proxy --label service-name=stress-svc nginx:alpine
+INFO:     127.0.0.1:42996 - "POST /api/v1/namespaces/default/pods HTTP/1.1" 201 Created
+INFO:     127.0.0.1:34252 - "GET /api/v1/namespaces/default/pods HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59210 - "PUT /api/apps/v1/namespaces/default/replicasets/stress-rs HTTP/1.1" 200 OK
+Creating pod stress-rs-3 for ReplicaSet stress-rs
+Creating pod stress-rs-4 for ReplicaSet stress-rs
+Creating pod stress-rs-5 for ReplicaSet stress-rs
+Creating pod stress-rs-6 for ReplicaSet stress-rs
+Creating pod stress-rs-7 for ReplicaSet stress-rs
+Creating pod stress-rs-8 for ReplicaSet stress-rs
+Creating pod stress-rs-9 for ReplicaSet stress-rs
+Starting missing container web for pod default_stress-rs-3
+Successfully removed container: default_stress-rs-3_web
+Executing: podman run -d --name default_stress-rs-3_web --network orchestrator-net --network-alias stress-rs-3 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-3 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+Starting missing container web for pod default_stress-rs-4
+Successfully removed container: default_stress-rs-4_web
+Executing: podman run -d --name default_stress-rs-4_web --network orchestrator-net --network-alias stress-rs-4 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-4 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+INFO:     127.0.0.1:59224 - "PUT /api/apps/v1/namespaces/default/replicasets/stress-rs HTTP/1.1" 200 OK
+Starting missing container web for pod default_stress-rs-5
+Successfully removed container: default_stress-rs-5_web
+Executing: podman run -d --name default_stress-rs-5_web --network orchestrator-net --network-alias stress-rs-5 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-5 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+Starting missing container web for pod default_stress-rs-6
+Successfully removed container: default_stress-rs-6_web
+Executing: podman run -d --name default_stress-rs-6_web --network orchestrator-net --network-alias stress-rs-6 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-6 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+Starting missing container web for pod default_stress-rs-7
+Successfully removed container: default_stress-rs-7_web
+Executing: podman run -d --name default_stress-rs-7_web --network orchestrator-net --network-alias stress-rs-7 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-7 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+Deleting pod stress-rs-9 for ReplicaSet stress-rs
+Deleting pod stress-rs-8 for ReplicaSet stress-rs
+Deleting pod stress-rs-7 for ReplicaSet stress-rs
+Deleting pod stress-rs-6 for ReplicaSet stress-rs
+Deleting pod stress-rs-5 for ReplicaSet stress-rs
+Deleting pod stress-rs-4 for ReplicaSet stress-rs
+Deleting pod stress-rs-3 for ReplicaSet stress-rs
+Deleting pod stress-rs-2 for ReplicaSet stress-rs
+Deleting pod stress-rs-1 for ReplicaSet stress-rs
+Starting missing container web for pod default_stress-rs-8
+Successfully removed container: default_stress-rs-8_web
+Executing: podman run -d --name default_stress-rs-8_web --network orchestrator-net --network-alias stress-rs-8 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-8 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+Starting missing container web for pod default_stress-rs-9
+Successfully removed container: default_stress-rs-9_web
+Executing: podman run -d --name default_stress-rs-9_web --network orchestrator-net --network-alias stress-rs-9 --label managed-by=my-orchestrator --label orchestrator-namespace=default --label orchestrator-pod-name=stress-rs-9 --label orchestrator-container-name=web --label pod-hash-number=d1cf380cb02030dcaac52e0808cc0dfc5e396c438cf2a60d56f04409c878711b --label app=stress-app docker.io/library/nginx:alpine
+Service stress-svc configuration changed. Reloading Nginx...
+Cleaning up orphaned pod: default_stress-rs-2
+Successfully removed container: default_stress-rs-2_web
+Cleaning up orphaned pod: default_stress-rs-1
+Service stress-svc configuration changed. Reloading Nginx...
+Successfully removed container: default_stress-rs-1_web
+Cleaning up orphaned pod: default_stress-rs-3
+Successfully removed container: default_stress-rs-3_web
+Cleaning up orphaned pod: default_stress-rs-4
+Successfully removed container: default_stress-rs-4_web
+Cleaning up orphaned pod: default_stress-rs-5
+Successfully removed container: default_stress-rs-5_web
+Cleaning up orphaned pod: default_stress-rs-6
+Successfully removed container: default_stress-rs-6_web
+Cleaning up orphaned pod: default_stress-rs-7
+Successfully removed container: default_stress-rs-7_web
+Cleaning up orphaned pod: default_stress-rs-8
+Successfully removed container: default_stress-rs-8_web
+Cleaning up orphaned pod: default_stress-rs-9
+Successfully removed container: default_stress-rs-9_web
+INFO:     127.0.0.1:50706 - "PUT /api/apps/v1/namespaces/default/replicasets/stress-rs HTTP/1.1" 200 OK

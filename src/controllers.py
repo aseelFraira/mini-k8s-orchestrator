@@ -127,10 +127,16 @@ class PodController(Controller):
 
                 if not c_info:
                     print(f"Starting missing container {c_name} for pod {key}")
-                    Container(pod=pod, container_name=c_name).start()
+                    try:
+                        Container(pod=pod, container_name=c_name).start()
+                    except Exception as e:
+                        print(f"Error starting container {c_name} for pod {key}: {e}")
                 elif not c_info["is_running"]:
-                    Container(full_name=c_info["full_name"]).stop()
-                    Container(pod=pod, container_name=c_name).start()
+                    try:
+                        Container(full_name=c_info["full_name"]).stop()
+                        Container(pod=pod, container_name=c_name).start()
+                    except Exception as e:
+                        print(f"Error restarting container {c_name} for pod {key}: {e}")
 
         # 5. Hash check for spec changes
         for key, pod in desired_pods.items():
@@ -167,10 +173,14 @@ class PodController(Controller):
             c_info = host_map.get(c_name)
 
             if c_info and c_info["is_running"]:
-                container_statuses.append({"name": c_name, "ready": True, "state": "running"})
+                container_statuses.append(
+                    {"name": c_name, "ready": True, "state": "running"}
+                )
                 any_running = True
             else:
-                container_statuses.append({"name": c_name, "ready": False, "state": "waiting"})
+                container_statuses.append(
+                    {"name": c_name, "ready": False, "state": "waiting"}
+                )
                 all_running = False
 
         # Determine phase
@@ -241,6 +251,7 @@ class ServiceController(Controller):
     def __init__(self, store: ResourceStore, pod_controller: PodController):
         super().__init__(store)
         self.pod_controller = pod_controller
+        self._last_configs = {}  # Cache: service_name -> config_str
 
     def reconcile(self):
         """Reconcile services - create proxy pods and update configs"""
@@ -267,14 +278,16 @@ class ServiceController(Controller):
     def _reconcile_service(self, service: ServiceResource):
         proxy_pod_name = f"proxy-{service.name}"
 
-        # 1. Ensure Shadow Pod Exists in Store
+        # 1. Ensure Shadow Pod Exists and is Up-to-Date in Store
+        proxy_spec = service.proxy_pod_spec
         existing_pod = self.store.get("Pod", proxy_pod_name, service.namespace)
+
         if not existing_pod:
             print(f"Creating proxy pod for {service.name}")
             pod = PodResource(
                 name=proxy_pod_name,
                 namespace=service.namespace,
-                spec=service.proxy_pod_spec,
+                spec=proxy_spec,
                 metadata={
                     "labels": {"role": "service-proxy", "service-name": service.name},
                 },
@@ -282,6 +295,14 @@ class ServiceController(Controller):
             self.store.create(pod)
             service.status = {"readyBackends": 0, "phase": "Pending"}
             return
+        else:
+            # Hash check the proxy pod spec to see if it needs update
+            if existing_pod.spec != proxy_spec:
+                print(f"Updating proxy pod spec for {service.name}")
+                existing_pod.spec = proxy_spec
+                # Force hash refresh by recreating the resource object or updating hash
+                existing_pod.spec_hash = existing_pod._generate_spec_hash(proxy_spec)
+                self.store.update(existing_pod)
 
         # 2. Get the running proxy container
         proxy_container = self.pod_controller.get_container(
@@ -304,8 +325,14 @@ class ServiceController(Controller):
 
         # 4. Generate and inject Nginx Config
         nginx_conf = self._generate_nginx_config(service, pod_ips)
-        self._inject_config(proxy_container, nginx_conf)
-        proxy_container.exec_command(["nginx", "-s", "reload"])
+
+        # IDEMPOTENCY CHECK: Only reload if the config has actually changed
+        current_config = self._last_configs.get(service.name)
+        if current_config != nginx_conf:
+            print(f"Service {service.name} configuration changed. Reloading Nginx...")
+            self._inject_config(proxy_container, nginx_conf)
+            proxy_container.exec_command(["nginx", "-s", "reload"])
+            self._last_configs[service.name] = nginx_conf
 
         # 5. Update service status
         service.status = {
@@ -410,7 +437,12 @@ class ReplicaSetController(Controller):
         """Ensure the store has the correct number of pods for this ReplicaSet"""
         # 1. Find existing pods in STORE that match this ReplicaSet's selector
         all_pods = self.store.list("Pod", rs.namespace)
-        owned_pods = [p for p in all_pods if self._matches_selector(p, rs.selector)]
+        owned_pods = [
+            p
+            for p in all_pods
+            if self._matches_selector(p, rs.selector)
+            and p.metadata.get("owner-replicaset") == rs.name
+        ]  # Filter pods by owner ReplicaSet too
 
         current_count = len(owned_pods)
         desired_count = rs.replicas
@@ -455,14 +487,36 @@ class ReplicaSetController(Controller):
                     if current_count >= desired_count:
                         break
 
-        # Scale down: delete excess pods
-        elif current_count > desired_count:
+        # 2. Update existing pods if template changed
+        template_spec = rs.template.get("spec", {})
+        for pod in owned_pods:
+            if pod.spec != template_spec:
+                print(
+                    f"Updating pod {pod.name} spec from ReplicaSet {rs.name} template"
+                )
+                pod.spec = template_spec
+                # Update hash so PodController detects the change
+                pod.spec_hash = pod._generate_spec_hash(template_spec)
+                self.store.update(pod)
+
+        # 3. Delete excess pods from store
+        if current_count > desired_count:
             excess = current_count - desired_count
-            # Filter to only pods owned by THIS ReplicaSet (using metadata, not name parsing)
+            # Filter to only pods owned by THIS ReplicaSet
             rs_owned_pods = [
                 p for p in owned_pods if p.metadata.get("owner-replicaset") == rs.name
             ]
-            # Delete the excess (just pick any, order doesn't matter for correctness)
+
+            # Sort pods by index (extracted from name "rsname-index") so we delete highest indices first
+            def get_pod_index(pod):
+                try:
+                    return int(pod.name.split("-")[-1])
+                except (ValueError, IndexError):
+                    return 0
+
+            rs_owned_pods.sort(key=get_pod_index, reverse=True)
+
+            # Delete the excess (highest indices first)
             pods_to_delete = rs_owned_pods[:excess]
 
             for pod in pods_to_delete:
