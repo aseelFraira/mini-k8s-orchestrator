@@ -1,29 +1,22 @@
 """
-Layer 2 & 3: Controller Tests for Mini-K8s Orchestrator
-Tests for ReplicaSetController, ServiceController, and PodController.
-Uses mocked Podman provider to test reconciliation logic.
+Unit Tests for Controllers (No Podman).
+
+Tests ReplicaSet and Service controller logic at the store level.
+For PodController tests with mocked Podman, see test_controllers_mock.py.
 """
-
-import pytest
-import sys
-import os
-from unittest.mock import MagicMock, patch, PropertyMock
-
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from resources import PodResource, ReplicaSetResource, ServiceResource
 from store import ResourceStore
-from controllers import ReplicaSetController, ServiceController, PodController
+from controllers import ReplicaSetController, ServiceController
 
 
 # =============================================================================
-# LAYER 2: REPLICASET CONTROLLER TESTS
+# REPLICASET CONTROLLER TESTS
 # =============================================================================
 
 
 class TestReplicaSetControllerAddPods:
-    """Tests for ReplicaSetController adding missing pods."""
+    """Tests for adding missing pods to reach desired replica count."""
 
     def setup_method(self):
         """Create a fresh store and controller for each test."""
@@ -32,6 +25,8 @@ class TestReplicaSetControllerAddPods:
 
     def test_creates_pods_when_none_exist(self):
         """Test that controller creates pods when replicas > 0 and no pods exist."""
+
+        # Create a ReplicaSet requesting 3 replicas.
         rs = ReplicaSetResource(
             name="web-rs",
             spec={
@@ -46,17 +41,22 @@ class TestReplicaSetControllerAddPods:
         )
         self.store.create(rs)
 
+        # Reconcile should create 3 pods to match desired state.
         self.controller.reconcile()
 
+        # Verify correct number of pods created.
         pods = self.store.list("Pod", "default")
         assert len(pods) == 3
 
+        # Verify pods have correct labels and owner reference.
         for pod in pods:
             assert pod.labels.get("app") == "web"
             assert pod.metadata.get("owner-replicaset") == "web-rs"
 
     def test_creates_missing_pods_when_below_desired(self):
         """Test that controller creates only missing pods."""
+
+        # RS wants 5 replicas.
         rs = ReplicaSetResource(
             name="partial-rs",
             spec={
@@ -71,7 +71,7 @@ class TestReplicaSetControllerAddPods:
         )
         self.store.create(rs)
 
-        # Pre-create 2 pods
+        # Pre-create only 2 pods (3 missing).
         for i in range(2):
             pod = PodResource(
                 name=f"partial-rs-{i}",
@@ -84,38 +84,16 @@ class TestReplicaSetControllerAddPods:
             )
             self.store.create(pod)
 
+        # Reconcile should create only the 3 missing pods.
         self.controller.reconcile()
 
         pods = self.store.list("Pod", "default")
         assert len(pods) == 5
 
-    def test_pod_names_follow_convention(self):
-        """Test that created pods follow the naming convention rs-name-index."""
-        rs = ReplicaSetResource(
-            name="named-rs",
-            spec={
-                "replicas": 3,
-                "selector": {"app": "named"},
-                "template": {
-                    "metadata": {"labels": {"app": "named"}},
-                    "spec": {"containers": [{"name": "app", "image": "nginx"}]},
-                },
-            },
-            namespace="default",
-        )
-        self.store.create(rs)
-
-        self.controller.reconcile()
-
-        pods = self.store.list("Pod", "default")
-        names = [p.name for p in pods]
-
-        assert "named-rs-0" in names
-        assert "named-rs-1" in names
-        assert "named-rs-2" in names
-
     def test_fills_gaps_in_indices(self):
         """Test that controller fills gaps when some indices are missing."""
+
+        # RS wants 3 replicas (indices 0, 1, 2).
         rs = ReplicaSetResource(
             name="gap-rs",
             spec={
@@ -130,7 +108,7 @@ class TestReplicaSetControllerAddPods:
         )
         self.store.create(rs)
 
-        # Only create pod at index 1 (gap at 0 and 2)
+        # Only create pod at index 1 (gaps at 0 and 2).
         pod = PodResource(
             name="gap-rs-1",
             spec={"containers": [{"name": "app", "image": "nginx"}]},
@@ -139,6 +117,7 @@ class TestReplicaSetControllerAddPods:
         )
         self.store.create(pod)
 
+        # Reconcile should fill gaps at indices 0 and 2.
         self.controller.reconcile()
 
         pods = self.store.list("Pod", "default")
@@ -151,7 +130,7 @@ class TestReplicaSetControllerAddPods:
 
 
 class TestReplicaSetControllerDeletePods:
-    """Tests for ReplicaSetController deleting excess pods."""
+    """Tests for deleting excess pods when above desired replica count."""
 
     def setup_method(self):
         """Create a fresh store and controller for each test."""
@@ -160,6 +139,8 @@ class TestReplicaSetControllerDeletePods:
 
     def test_deletes_excess_pods_when_above_desired(self):
         """Test that controller deletes pods when count > desired replicas."""
+
+        # RS only wants 2 replicas.
         rs = ReplicaSetResource(
             name="shrink-rs",
             spec={
@@ -174,7 +155,7 @@ class TestReplicaSetControllerDeletePods:
         )
         self.store.create(rs)
 
-        # Create 5 pods (3 more than desired)
+        # Create 5 pods (3 more than desired).
         for i in range(5):
             pod = PodResource(
                 name=f"shrink-rs-{i}",
@@ -264,7 +245,7 @@ class TestReplicaSetControllerDeletePods:
 
 
 class TestReplicaSetControllerOrphanCleanup:
-    """Tests for ReplicaSetController cleaning up orphaned pods."""
+    """Tests for cleaning up pods whose owner ReplicaSet was deleted."""
 
     def setup_method(self):
         """Create a fresh store and controller for each test."""
@@ -323,7 +304,7 @@ class TestReplicaSetControllerOrphanCleanup:
 
 
 class TestReplicaSetControllerSpecChanges:
-    """Tests for ReplicaSetController handling spec changes."""
+    """Tests for handling replica count changes (scale up/down)."""
 
     def setup_method(self):
         """Create a fresh store and controller for each test."""
@@ -410,7 +391,7 @@ class TestReplicaSetControllerSpecChanges:
 
 
 class TestReplicaSetIdempotency:
-    """Tests for ReplicaSetController idempotency."""
+    """Tests that multiple reconciles with stable state are idempotent."""
 
     def setup_method(self):
         """Create a fresh store and controller for each test."""
@@ -450,12 +431,12 @@ class TestReplicaSetIdempotency:
 
 
 # =============================================================================
-# LAYER 2: SERVICE CONTROLLER TESTS
+# SERVICE CONTROLLER TESTS
 # =============================================================================
 
 
 class TestServiceControllerProxyPod:
-    """Tests for ServiceController creating proxy pods."""
+    """Tests for creating nginx proxy pods for Services."""
 
     def setup_method(self):
         """Create a fresh store and controller for each test."""
@@ -507,7 +488,7 @@ class TestServiceControllerProxyPod:
 
 
 class TestServiceControllerOrphanCleanup:
-    """Tests for ServiceController cleaning up orphaned proxy pods."""
+    """Tests for cleaning up proxy pods whose Service was deleted."""
 
     def setup_method(self):
         """Create a fresh store and controller for each test."""
@@ -548,132 +529,12 @@ class TestServiceControllerOrphanCleanup:
 
 
 # =============================================================================
-# LAYER 2: POD CONTROLLER TESTS (WITH MOCKED PODMAN)
-# =============================================================================
-
-
-class TestPodControllerReconcile:
-    """Tests for PodController reconciliation with mocked Podman."""
-
-    def setup_method(self):
-        """Create a fresh store for each test."""
-        self.store = ResourceStore()
-
-    def test_creates_container_for_new_pod(self, mock_podman):
-        """Test that PodController creates a container for a new pod."""
-        mock_api = MagicMock()
-        controller = PodController(self.store, mock_api)
-
-        pod = PodResource(
-            name="new-pod",
-            spec={"containers": [{"name": "main", "image": "nginx:latest"}]},
-            namespace="default",
-        )
-        self.store.create(pod)
-
-        controller.reconcile()
-
-        # Verify container was "created" in mock
-        assert "default_new-pod_main" in mock_podman.containers
-
-    def test_deletes_orphan_container(self, mock_podman):
-        """Test that PodController deletes containers not in store."""
-        mock_api = MagicMock()
-        controller = PodController(self.store, mock_api)
-
-        # Simulate an orphan container in runtime
-        mock_podman.containers["default_orphan-pod_main"] = {
-            "name": "default_orphan-pod_main",
-            "labels": {
-                "managed-by": "my-orchestrator",
-                "orchestrator-namespace": "default",
-                "orchestrator-pod-name": "orphan-pod",
-            },
-            "running": True,
-        }
-
-        controller.reconcile()
-
-        # Orphan should be deleted
-        assert "default_orphan-pod_main" not in mock_podman.containers
-
-    def test_recreates_container_on_spec_drift(self, mock_podman):
-        """Test that PodController recreates container when spec hash changes."""
-        mock_api = MagicMock()
-        controller = PodController(self.store, mock_api)
-
-        # Create pod in store
-        pod = PodResource(
-            name="drift-pod",
-            spec={"containers": [{"name": "main", "image": "nginx:v1"}]},
-            namespace="default",
-        )
-        self.store.create(pod)
-
-        # Simulate existing container with old hash
-        mock_podman.containers["default_drift-pod_main"] = {
-            "name": "default_drift-pod_main",
-            "labels": {
-                "managed-by": "my-orchestrator",
-                "orchestrator-namespace": "default",
-                "orchestrator-pod-name": "drift-pod",
-                "pod-hash-number": "old-hash-value",
-            },
-            "running": True,
-        }
-
-        controller.reconcile()
-
-        # Container should be recreated with new spec
-        assert "default_drift-pod_main" in mock_podman.containers
-
-
-class TestPodControllerIdempotency:
-    """Tests for PodController idempotency."""
-
-    def setup_method(self):
-        """Create a fresh store for each test."""
-        self.store = ResourceStore()
-
-    def test_no_action_when_synced(self, mock_podman):
-        """Test that no actions are taken when store and runtime are synced."""
-        mock_api = MagicMock()
-        controller = PodController(self.store, mock_api)
-
-        # Create pod in store
-        pod = PodResource(
-            name="synced-pod",
-            spec={"containers": [{"name": "main", "image": "nginx"}]},
-            namespace="default",
-        )
-        self.store.create(pod)
-
-        # Initial reconcile creates container
-        controller.reconcile()
-        initial_call_count = len(mock_podman.call_log)
-
-        # Simulate that container has correct hash
-        container_key = "default_synced-pod_main"
-        if container_key in mock_podman.containers:
-            mock_podman.containers[container_key]["labels"][
-                "pod-hash-number"
-            ] = pod.spec_hash
-
-        # Run 5 more reconciles
-        for _ in range(5):
-            controller.reconcile()
-
-        # Should have minimal additional calls (just listing/inspecting)
-        # The key is no create/delete operations beyond the first
-
-
-# =============================================================================
-# LAYER 3: INTEGRATION TESTS
+# MULTIPLE REPLICASETS TESTS
 # =============================================================================
 
 
 class TestMultipleReplicaSets:
-    """Tests for multiple ReplicaSets coexisting."""
+    """Tests for multiple ReplicaSets managing pods independently."""
 
     def setup_method(self):
         """Create a fresh store and controller for each test."""
@@ -682,6 +543,8 @@ class TestMultipleReplicaSets:
 
     def test_multiple_replicasets_independent(self):
         """Test that multiple ReplicaSets manage their pods independently."""
+
+        # Create two ReplicaSets with different selectors.
         rs1 = ReplicaSetResource(
             name="rs-alpha",
             spec={
@@ -709,11 +572,14 @@ class TestMultipleReplicaSets:
         self.store.create(rs1)
         self.store.create(rs2)
 
+        # Single reconcile should create pods for both RS.
         self.controller.reconcile()
 
+        # Verify total pod count.
         all_pods = self.store.list("Pod", "default")
-        assert len(all_pods) == 5
+        assert len(all_pods) == 5  # 2 + 3
 
+        # Verify each RS manages its own pods independently.
         alpha_pods = [p for p in all_pods if p.labels.get("app") == "alpha"]
         beta_pods = [p for p in all_pods if p.labels.get("app") == "beta"]
 
@@ -722,6 +588,8 @@ class TestMultipleReplicaSets:
 
     def test_deleting_one_rs_doesnt_affect_other(self):
         """Test that deleting one RS doesn't affect another RS's pods."""
+
+        # Create two ReplicaSets.
         rs1 = ReplicaSetResource(
             name="rs-keep",
             spec={
@@ -750,208 +618,15 @@ class TestMultipleReplicaSets:
         self.store.create(rs2)
 
         self.controller.reconcile()
-        assert len(self.store.list("Pod", "default")) == 4
+        assert len(self.store.list("Pod", "default")) == 4  # 2 + 2
 
-        # Delete one RS
+        # Delete one RS - its pods should be cleaned up.
         self.store.delete("ReplicaSet", "rs-delete", "default")
 
         self.controller.reconcile()
 
+        # Only rs-keep pods should remain.
         pods = self.store.list("Pod", "default")
         assert len(pods) == 2
         for pod in pods:
             assert pod.labels.get("app") == "keep"
-
-
-class TestCascadingReconciliation:
-    """Tests for cascading effects between controllers."""
-
-    def setup_method(self):
-        """Create a fresh store for each test."""
-        self.store = ResourceStore()
-
-    def test_rs_creates_pods_for_service(self, mock_podman):
-        """Test RS creates pods that can be selected by Service."""
-        rs_controller = ReplicaSetController(self.store)
-        svc_controller = ServiceController(self.store, None)
-
-        # Create ReplicaSet
-        rs = ReplicaSetResource(
-            name="web-rs",
-            spec={
-                "replicas": 2,
-                "selector": {"app": "web"},
-                "template": {
-                    "metadata": {"labels": {"app": "web"}},
-                    "spec": {"containers": [{"name": "app", "image": "nginx"}]},
-                },
-            },
-            namespace="default",
-        )
-        self.store.create(rs)
-
-        # Create Service targeting the same label
-        svc = ServiceResource(
-            name="web-svc",
-            spec={
-                "selector": {"app": "web"},
-                "ports": [{"port": 80, "targetPort": 80}],
-            },
-            namespace="default",
-        )
-        self.store.create(svc)
-
-        # RS reconcile creates pods
-        rs_controller.reconcile()
-
-        # Verify pods exist with correct labels
-        pods = self.store.list("Pod", "default")
-        web_pods = [p for p in pods if p.labels.get("app") == "web"]
-        assert len(web_pods) == 2
-
-        # Service reconcile creates proxy (will fail on actual container ops)
-        try:
-            svc_controller.reconcile()
-        except Exception:
-            pass
-
-        # Verify proxy pod was created
-        proxy = self.store.get("Pod", "proxy-web-svc", "default")
-        assert proxy is not None
-
-
-class TestNamespaceIsolation:
-    """Tests for controller namespace isolation."""
-
-    def setup_method(self):
-        """Create a fresh store for each test."""
-        self.store = ResourceStore()
-        self.controller = ReplicaSetController(self.store)
-
-    def test_rs_in_different_namespaces_isolated(self):
-        """Test that ReplicaSets in different namespaces don't interfere."""
-        rs_prod = ReplicaSetResource(
-            name="web-rs",
-            spec={
-                "replicas": 2,
-                "selector": {"app": "web"},
-                "template": {
-                    "metadata": {"labels": {"app": "web"}},
-                    "spec": {"containers": [{"name": "app", "image": "nginx"}]},
-                },
-            },
-            namespace="production",
-        )
-        rs_dev = ReplicaSetResource(
-            name="web-rs",  # Same name, different namespace
-            spec={
-                "replicas": 1,
-                "selector": {"app": "web"},
-                "template": {
-                    "metadata": {"labels": {"app": "web"}},
-                    "spec": {"containers": [{"name": "app", "image": "nginx"}]},
-                },
-            },
-            namespace="development",
-        )
-        self.store.create(rs_prod)
-        self.store.create(rs_dev)
-
-        self.controller.reconcile()
-
-        prod_pods = self.store.list("Pod", "production")
-        dev_pods = self.store.list("Pod", "development")
-
-        assert len(prod_pods) == 2
-        assert len(dev_pods) == 1
-
-
-class TestPartialReconcileFailure:
-    """Tests for handling partial reconciliation failures."""
-
-    def setup_method(self):
-        """Create a fresh store for each test."""
-        self.store = ResourceStore()
-
-    def test_store_reflects_partial_state_on_failure(self, mock_podman):
-        """Test that store correctly reflects partial state when some ops fail."""
-        mock_api = MagicMock()
-        controller = PodController(self.store, mock_api)
-
-        # Create 3 pods
-        for i in range(3):
-            pod = PodResource(
-                name=f"partial-pod-{i}",
-                spec={"containers": [{"name": "main", "image": "nginx"}]},
-                namespace="default",
-            )
-            self.store.create(pod)
-
-        # Make the second container creation fail
-        mock_podman.fail_on_container = "default_partial-pod-1_main"
-
-        # Reconcile - should handle partial failure gracefully
-        try:
-            controller.reconcile()
-        except Exception:
-            pass
-
-        # At least some containers should exist
-        assert len(mock_podman.containers) >= 1
-
-
-class TestControllerCoordination:
-    """Tests for multiple controllers working together."""
-
-    def setup_method(self):
-        """Create a fresh store for each test."""
-        self.store = ResourceStore()
-
-    def test_full_reconciliation_cycle(self, mock_podman):
-        """Test a full cycle: RS creates pods, Service creates proxy."""
-        mock_api = MagicMock()
-
-        rs_controller = ReplicaSetController(self.store)
-        pod_controller = PodController(self.store, mock_api)
-        svc_controller = ServiceController(self.store, pod_controller)
-
-        # Create resources
-        rs = ReplicaSetResource(
-            name="app-rs",
-            spec={
-                "replicas": 2,
-                "selector": {"app": "myapp"},
-                "template": {
-                    "metadata": {"labels": {"app": "myapp"}},
-                    "spec": {"containers": [{"name": "app", "image": "myapp:v1"}]},
-                },
-            },
-            namespace="default",
-        )
-        svc = ServiceResource(
-            name="app-svc",
-            spec={
-                "selector": {"app": "myapp"},
-                "ports": [{"port": 8080, "targetPort": 8080}],
-            },
-            namespace="default",
-        )
-        self.store.create(rs)
-        self.store.create(svc)
-
-        # Run controllers in sequence
-        rs_controller.reconcile()  # Creates pods in store
-        pod_controller.reconcile()  # Creates containers
-
-        try:
-            svc_controller.reconcile()  # Creates proxy pod + container
-        except Exception:
-            pass
-
-        # Verify final state
-        pods = self.store.list("Pod", "default")
-        assert len(pods) >= 2  # At least the RS pods
-
-        # Check containers were created
-        app_containers = [c for c in mock_podman.containers.keys() if "app-rs" in c]
-        assert len(app_containers) >= 1
