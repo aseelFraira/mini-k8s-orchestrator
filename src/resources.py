@@ -53,6 +53,21 @@ class PodResource(Resource):
         metadata: Dict[str, Any] = None,
         namespace: str = "default",
     ):
+        # Validate name length
+        if len(name) > 253:
+            raise ValueError(f"Pod name '{name[:50]}...' exceeds maximum length of 253 characters")
+
+        # Validate containers
+        containers = spec.get("containers", [])
+        if not containers:
+            raise ValueError("Pod spec must contain at least one container")
+
+        for i, container in enumerate(containers):
+            if not container.get("name"):
+                raise ValueError(f"Container at index {i} must have a name")
+            if "image" not in container or container.get("image") is None:
+                raise ValueError(f"Container '{container.get('name', i)}' must have an image")
+
         super().__init__(
             api_version="v1",
             kind="Pod",
@@ -118,6 +133,11 @@ class ServiceResource(Resource):
         metadata: Dict[str, Any] = None,
         namespace: str = "default",
     ):
+        # Validate ports
+        ports = spec.get("ports")
+        if not ports:
+            raise ValueError("Service spec must contain ports")
+
         super().__init__(
             api_version="v1",
             kind="Service",
@@ -177,6 +197,22 @@ class ReplicaSetResource(Resource):
         metadata: Dict[str, Any] = None,
         namespace: str = "default",
     ):
+        # Validate selector
+        if "selector" not in spec:
+            raise ValueError("ReplicaSet spec must contain a selector")
+
+        # Validate template
+        if "template" not in spec:
+            raise ValueError("ReplicaSet spec must contain a template")
+
+        # Validate replicas if present
+        if "replicas" in spec:
+            replicas = spec["replicas"]
+            if not isinstance(replicas, int):
+                raise ValueError(f"replicas must be an integer, got {type(replicas).__name__}")
+            if replicas < 0:
+                raise ValueError(f"replicas must be >= 0, got {replicas}")
+
         super().__init__(
             api_version="apps/v1",
             kind="ReplicaSet",

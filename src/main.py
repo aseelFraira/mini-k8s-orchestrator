@@ -122,8 +122,11 @@ async def update_pod(namespace: str, name: str, resource: ResourceRequest):
     resource_dict["metadata"]["namespace"] = namespace
     resource_dict["metadata"]["name"] = name
 
-    updated = cluster.apply_resource(resource_dict, namespace)
-    return resource_response(updated)
+    try:
+        updated = cluster.apply_resource(resource_dict, namespace)
+        return resource_response(updated)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 # =============================================================================
@@ -185,8 +188,11 @@ async def update_service(namespace: str, name: str, resource: ResourceRequest):
     resource_dict["metadata"]["namespace"] = namespace
     resource_dict["metadata"]["name"] = name
 
-    updated = cluster.apply_resource(resource_dict, namespace)
-    return resource_response(updated)
+    try:
+        updated = cluster.apply_resource(resource_dict, namespace)
+        return resource_response(updated)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 # =============================================================================
@@ -251,8 +257,11 @@ async def update_replicaset(namespace: str, name: str, resource: ResourceRequest
     resource_dict["metadata"]["namespace"] = namespace
     resource_dict["metadata"]["name"] = name
 
-    updated = cluster.apply_resource(resource_dict, namespace)
-    return resource_response(updated)
+    try:
+        updated = cluster.apply_resource(resource_dict, namespace)
+        return resource_response(updated)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 # =============================================================================
