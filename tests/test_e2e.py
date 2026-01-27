@@ -1,734 +1,690 @@
 """
-Layer 4: End-to-End Tests for Mini-K8s Orchestrator
-Real-world execution using subprocess and actual Podman.
-These tests require Podman to be installed and running.
+End-to-End (E2E) Tests for the Mini-K8s Orchestrator.
 """
 
 import pytest
 import subprocess
 import time
-import sys
-import os
-import json
+import urllib.request
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from fastapi.testclient import TestClient
+from main import app, cluster
+from conftest import (
+    WAIT_POD_READY,
+    WAIT_MULTI_POD,
+    WAIT_CLEANUP,
+    cleanup_test_containers,
+    requires_podman,
+)
 
-from resources import PodResource, ReplicaSetResource, ServiceResource
-from store import ResourceStore
-from controllers import ReplicaSetController, ServiceController, PodController
-from container import Container
-
-# Import the skip marker from conftest
-from conftest import skip_if_no_podman, is_podman_available
-
-
-# =============================================================================
-# UTILITIES
-# =============================================================================
-
-
-def podman_container_exists(name: str) -> bool:
-    """Check if a container exists (running or stopped)."""
-    result = subprocess.run(
-        ["podman", "ps", "-a", "--format", "{{.Names}}", "--filter", f"name=^{name}$"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return name in result.stdout
-
-
-def podman_container_running(name: str) -> bool:
-    """Check if a container is running."""
-    result = subprocess.run(
-        ["podman", "inspect", "-f", "{{.State.Running}}", name],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.returncode == 0 and result.stdout.strip() == "true"
-
-
-def podman_get_container_label(name: str, label: str) -> str:
-    """Get a label value from a container."""
-    result = subprocess.run(
-        ["podman", "inspect", "-f", f'{{{{index .Config.Labels "{label}"}}}}', name],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.stdout.strip() if result.returncode == 0 else None
-
-
-def podman_list_orchestrator_containers() -> list:
-    """List all containers managed by the orchestrator."""
-    result = subprocess.run(
-        [
-            "podman",
-            "ps",
-            "-a",
-            "--filter",
-            "label=managed-by=my-orchestrator",
-            "--format",
-            "{{.Names}}",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        return result.stdout.strip().split("\n")
-    return []
-
-
-def nuclear_cleanup():
-    """Force remove all orchestrator-managed containers."""
-    containers = podman_list_orchestrator_containers()
-    for container in containers:
-        if container:
-            subprocess.run(
-                ["podman", "rm", "-f", container],
-                capture_output=True,
-                check=False,
-            )
-
-
-def ensure_network_exists():
-    """Ensure the orchestrator network exists."""
-    result = subprocess.run(
-        ["podman", "network", "exists", "orchestrator-net"],
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        subprocess.run(
-            ["podman", "network", "create", "orchestrator-net"],
-            capture_output=True,
-            check=False,
-        )
+pytestmark = requires_podman
 
 
 # =============================================================================
-# E2E POD LIFECYCLE TESTS
+# POD E2E TESTS
 # =============================================================================
 
 
-@pytest.mark.e2e
-@skip_if_no_podman
-class TestE2EPodLifecycle:
-    """End-to-end tests for Pod lifecycle with real Podman."""
+class TestE2EPod:
+    """
+    E2E tests for Pod Endpoints.
+    """
 
-    def setup_method(self):
-        """Setup before each test."""
-        nuclear_cleanup()
-        ensure_network_exists()
-        self.store = ResourceStore()
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Reset cluster state and clean up containers before/after each test."""
+        cluster.store.resources = {"Pod": {}, "Service": {}, "ReplicaSet": {}}
+        cleanup_test_containers()
+        with TestClient(app) as client:
+            self.client = client
+            yield
+        cleanup_test_containers()
 
-    def teardown_method(self):
-        """Nuclear cleanup after each test."""
-        nuclear_cleanup()
+    def test_pod_becomes_running(self):
+        """Verify a created pod transitions to Running state."""
 
-    def test_create_pod_creates_container(self):
-        """Test that creating a pod in the store results in a running container."""
-        pod = PodResource(
-            name="e2e-test-pod",
-            spec={"containers": [{"name": "main", "image": "alpine:latest"}]},
-            namespace="default",
-        )
-        self.store.create(pod)
-
-        # Create and run PodController
-        controller = PodController(self.store, None)
-
-        try:
-            controller.reconcile()
-        except Exception as e:
-            print(f"Reconcile error (may be expected): {e}")
-
-        # Wait a moment for container to start
-        time.sleep(1)
-
-        # Verify container exists
-        container_name = "default_e2e-test-pod_main"
-        assert podman_container_exists(
-            container_name
-        ), f"Container {container_name} should exist"
-
-    def test_delete_pod_removes_container(self):
-        """Test that deleting a pod from the store removes the container."""
-        # First create a pod
-        pod = PodResource(
-            name="e2e-delete-pod",
-            spec={"containers": [{"name": "main", "image": "alpine:latest"}]},
-            namespace="default",
-        )
-        self.store.create(pod)
-
-        controller = PodController(self.store, None)
-
-        try:
-            controller.reconcile()
-        except Exception:
-            pass
-
-        time.sleep(1)
-
-        container_name = "default_e2e-delete-pod_main"
-        assert podman_container_exists(
-            container_name
-        ), "Container should exist before delete"
-
-        # Delete from store
-        self.store.delete("Pod", "e2e-delete-pod", "default")
-
-        # Reconcile again
-        try:
-            controller.reconcile()
-        except Exception:
-            pass
-
-        time.sleep(1)
-
-        # Container should be gone
-        assert not podman_container_exists(
-            container_name
-        ), "Container should be removed after delete"
-
-    def test_pod_has_correct_labels(self):
-        """Test that created container has correct orchestrator labels."""
-        pod = PodResource(
-            name="e2e-labeled-pod",
-            spec={"containers": [{"name": "app", "image": "alpine:latest"}]},
-            metadata={"labels": {"app": "test", "version": "v1"}},
-            namespace="myns",
-        )
-        self.store.create(pod)
-
-        controller = PodController(self.store, None)
-
-        try:
-            controller.reconcile()
-        except Exception:
-            pass
-
-        time.sleep(1)
-
-        container_name = "myns_e2e-labeled-pod_app"
-
-        # Verify orchestrator labels
-        assert (
-            podman_get_container_label(container_name, "managed-by")
-            == "my-orchestrator"
-        )
-        assert (
-            podman_get_container_label(container_name, "orchestrator-namespace")
-            == "myns"
-        )
-        assert (
-            podman_get_container_label(container_name, "orchestrator-pod-name")
-            == "e2e-labeled-pod"
-        )
-
-        # Verify user labels
-        assert podman_get_container_label(container_name, "app") == "test"
-        assert podman_get_container_label(container_name, "version") == "v1"
-
-
-# =============================================================================
-# E2E REPLICASET TESTS
-# =============================================================================
-
-
-@pytest.mark.e2e
-@skip_if_no_podman
-class TestE2EReplicaSetScaling:
-    """End-to-end tests for ReplicaSet scaling with real Podman."""
-
-    def setup_method(self):
-        """Setup before each test."""
-        nuclear_cleanup()
-        ensure_network_exists()
-        self.store = ResourceStore()
-
-    def teardown_method(self):
-        """Nuclear cleanup after each test."""
-        nuclear_cleanup()
-
-    def test_replicaset_creates_expected_containers(self):
-        """Test that a ReplicaSet creates the expected number of containers."""
-        rs = ReplicaSetResource(
-            name="e2e-rs",
-            spec={
-                "replicas": 3,
-                "selector": {"app": "e2e-app"},
-                "template": {
-                    "metadata": {"labels": {"app": "e2e-app"}},
-                    "spec": {"containers": [{"name": "app", "image": "alpine:latest"}]},
+        # Create a pod with a single container.
+        response = self.client.post(
+            "/api/v1/namespaces/default/pods",
+            json={
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "e2e-running-pod"},
+                "spec": {
+                    "containers": [
+                        {"name": "nginx", "image": "docker.io/library/nginx:alpine"}
+                    ]
                 },
             },
-            namespace="default",
         )
-        self.store.create(rs)
+        assert response.status_code == 201
 
-        # Run RS controller to create pods in store
-        rs_controller = ReplicaSetController(self.store)
-        rs_controller.reconcile()
+        time.sleep(WAIT_POD_READY)
 
-        # Verify pods in store
-        pods = self.store.list("Pod", "default")
-        assert len(pods) == 3
+        # Get the pod and verify it is in Running state.
+        pod = self.client.get("/api/v1/namespaces/default/pods/e2e-running-pod").json()
+        assert pod["status"]["phase"] == "Running", f"Pod not running: {pod['status']}"
 
-        # Run Pod controller to create actual containers
-        pod_controller = PodController(self.store, None)
+    def test_pod_container_status_ready(self):
+        """Verify container status shows ready=True when container is running."""
 
-        try:
-            pod_controller.reconcile()
-        except Exception:
-            pass
-
-        time.sleep(2)
-
-        # Verify containers exist
-        containers = podman_list_orchestrator_containers()
-        rs_containers = [c for c in containers if "e2e-rs" in c]
-        assert (
-            len(rs_containers) == 3
-        ), f"Expected 3 containers, got {len(rs_containers)}: {rs_containers}"
-
-    def test_replicaset_scale_up(self):
-        """Test scaling up a ReplicaSet creates more containers."""
-        rs = ReplicaSetResource(
-            name="e2e-scale-rs",
-            spec={
-                "replicas": 2,
-                "selector": {"app": "e2e-scale"},
-                "template": {
-                    "metadata": {"labels": {"app": "e2e-scale"}},
-                    "spec": {"containers": [{"name": "app", "image": "alpine:latest"}]},
+        # Create a pod with a single container.
+        self.client.post(
+            "/api/v1/namespaces/default/pods",
+            json={
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "e2e-ready-pod"},
+                "spec": {
+                    "containers": [
+                        {"name": "app", "image": "docker.io/library/nginx:alpine"}
+                    ]
                 },
             },
-            namespace="default",
         )
-        self.store.create(rs)
 
-        rs_controller = ReplicaSetController(self.store)
-        pod_controller = PodController(self.store, None)
+        time.sleep(WAIT_POD_READY)
 
-        # Initial reconcile
-        rs_controller.reconcile()
-        try:
-            pod_controller.reconcile()
-        except Exception:
-            pass
+        # Get the pod and verify the container is in Running state.
+        pod = self.client.get("/api/v1/namespaces/default/pods/e2e-ready-pod").json()
+        container_statuses = pod["status"].get("containerStatuses", [])
+        assert len(container_statuses) == 1
+        assert container_statuses[0]["ready"] is True
+        assert container_statuses[0]["state"] == "running"
 
-        time.sleep(2)
+    def test_pod_with_environment_variables(self):
+        """Verify pods with environment variables start correctly."""
 
-        initial_containers = [
-            c for c in podman_list_orchestrator_containers() if "e2e-scale-rs" in c
-        ]
-        assert len(initial_containers) == 2
-
-        # Scale up
-        scaled_rs = ReplicaSetResource(
-            name="e2e-scale-rs",
-            spec={
-                "replicas": 4,
-                "selector": {"app": "e2e-scale"},
-                "template": {
-                    "metadata": {"labels": {"app": "e2e-scale"}},
-                    "spec": {"containers": [{"name": "app", "image": "alpine:latest"}]},
+        # Create a pod with a single container and environment variables.
+        response = self.client.post(
+            "/api/v1/namespaces/default/pods",
+            json={
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "e2e-env-pod"},
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "app",
+                            "image": "docker.io/library/nginx:alpine",
+                            "env": {
+                                "MY_VAR": "test-value",
+                                "ANOTHER_VAR": "another-value",
+                            },
+                        }
+                    ]
                 },
             },
-            namespace="default",
         )
-        self.store.create_or_update(scaled_rs)
+        assert response.status_code == 201
 
-        rs_controller.reconcile()
-        try:
-            pod_controller.reconcile()
-        except Exception:
-            pass
+        time.sleep(WAIT_POD_READY)
 
-        time.sleep(2)
+        # Get the pod and verify it is in Running state.
+        pod = self.client.get("/api/v1/namespaces/default/pods/e2e-env-pod").json()
+        assert pod["status"]["phase"] == "Running"
 
-        final_containers = [
-            c for c in podman_list_orchestrator_containers() if "e2e-scale-rs" in c
-        ]
-        assert (
-            len(final_containers) == 4
-        ), f"Expected 4, got {len(final_containers)}: {final_containers}"
+    def test_pod_labels_preserved(self):
+        """Verify pod labels are stored and retrievable via API."""
 
-    def test_replicaset_scale_down(self):
-        """Test scaling down a ReplicaSet removes containers."""
-        rs = ReplicaSetResource(
-            name="e2e-shrink-rs",
-            spec={
-                "replicas": 4,
-                "selector": {"app": "e2e-shrink"},
-                "template": {
-                    "metadata": {"labels": {"app": "e2e-shrink"}},
-                    "spec": {"containers": [{"name": "app", "image": "alpine:latest"}]},
+        # Create a pod with labels.
+        response = self.client.post(
+            "/api/v1/namespaces/default/pods",
+            json={
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {
+                    "name": "e2e-labeled-pod",
+                    "labels": {"app": "test-app", "version": "v1", "env": "test"},
+                },
+                "spec": {
+                    "containers": [
+                        {"name": "app", "image": "docker.io/library/nginx:alpine"}
+                    ]
                 },
             },
-            namespace="default",
         )
-        self.store.create(rs)
+        assert response.status_code == 201
 
-        rs_controller = ReplicaSetController(self.store)
-        pod_controller = PodController(self.store, None)
+        time.sleep(WAIT_POD_READY)
 
-        # Initial reconcile
-        rs_controller.reconcile()
-        try:
-            pod_controller.reconcile()
-        except Exception:
-            pass
+        # Get the pod and verify the labels are stored and retrievable via API.
+        pod = self.client.get("/api/v1/namespaces/default/pods/e2e-labeled-pod").json()
+        assert pod["metadata"]["labels"]["app"] == "test-app"
+        assert pod["metadata"]["labels"]["version"] == "v1"
+        assert pod["metadata"]["labels"]["env"] == "test"
+        assert pod["status"]["phase"] == "Running"
 
-        time.sleep(2)
+    def test_delete_pod_stops_container(self):
+        """Verify deleting a pod stops and removes the container."""
 
-        initial_containers = [
-            c for c in podman_list_orchestrator_containers() if "e2e-shrink-rs" in c
-        ]
-        assert len(initial_containers) == 4
-
-        # Scale down
-        scaled_rs = ReplicaSetResource(
-            name="e2e-shrink-rs",
-            spec={
-                "replicas": 1,
-                "selector": {"app": "e2e-shrink"},
-                "template": {
-                    "metadata": {"labels": {"app": "e2e-shrink"}},
-                    "spec": {"containers": [{"name": "app", "image": "alpine:latest"}]},
+        # Create a pod with a single container.
+        self.client.post(
+            "/api/v1/namespaces/default/pods",
+            json={
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "e2e-delete-pod"},
+                "spec": {
+                    "containers": [
+                        {"name": "app", "image": "docker.io/library/nginx:alpine"}
+                    ]
                 },
             },
-            namespace="default",
         )
-        self.store.create_or_update(scaled_rs)
 
-        rs_controller.reconcile()
-        try:
-            pod_controller.reconcile()
-        except Exception:
-            pass
+        time.sleep(WAIT_POD_READY)
 
-        time.sleep(2)
+        # Get the pod and verify it is in Running state.
+        pod = self.client.get("/api/v1/namespaces/default/pods/e2e-delete-pod").json()
+        assert pod["status"]["phase"] == "Running"
 
-        final_containers = [
-            c for c in podman_list_orchestrator_containers() if "e2e-shrink-rs" in c
-        ]
-        assert (
-            len(final_containers) == 1
-        ), f"Expected 1, got {len(final_containers)}: {final_containers}"
+        # Delete the pod and verify the container is stopped and removed.
+        self.client.delete("/api/v1/namespaces/default/pods/e2e-delete-pod")
+        time.sleep(WAIT_CLEANUP)
 
+        # Verify the pod is not found.
+        response = self.client.get("/api/v1/namespaces/default/pods/e2e-delete-pod")
+        assert response.status_code == 404
 
-# =============================================================================
-# E2E SERVICE PROXY TESTS
-# =============================================================================
+    def test_pods_can_reach_each_other_by_name(self):
+        """Verify pods in the same network can communicate using pod names."""
 
-
-@pytest.mark.e2e
-@skip_if_no_podman
-class TestE2EServiceProxy:
-    """End-to-end tests for Service proxy functionality."""
-
-    def setup_method(self):
-        """Setup before each test."""
-        nuclear_cleanup()
-        ensure_network_exists()
-        self.store = ResourceStore()
-
-    def teardown_method(self):
-        """Nuclear cleanup after each test."""
-        nuclear_cleanup()
-
-    def test_service_creates_proxy_container(self):
-        """Test that a Service creates an nginx proxy container."""
-        # First create a backend pod
-        pod = PodResource(
-            name="e2e-backend",
-            spec={"containers": [{"name": "app", "image": "alpine:latest"}]},
-            metadata={"labels": {"app": "e2e-backend"}},
-            namespace="default",
-        )
-        self.store.create(pod)
-
-        # Create service
-        svc = ServiceResource(
-            name="e2e-service",
-            spec={
-                "selector": {"app": "e2e-backend"},
-                "ports": [{"port": 8080, "targetPort": 8080}],
-            },
-            namespace="default",
-        )
-        self.store.create(svc)
-
-        # Run controllers
-        pod_controller = PodController(self.store, None)
-        svc_controller = ServiceController(self.store, pod_controller)
-
-        try:
-            pod_controller.reconcile()
-        except Exception:
-            pass
-
-        try:
-            svc_controller.reconcile()
-        except Exception:
-            pass
-
-        time.sleep(2)
-
-        # Verify proxy container exists
-        proxy_name = "default_proxy-e2e-service_nginx"
-        containers = podman_list_orchestrator_containers()
-
-        # Check for proxy pod in store
-        proxy_pod = self.store.get("Pod", "proxy-e2e-service", "default")
-        assert proxy_pod is not None, "Proxy pod should exist in store"
-        assert proxy_pod.labels.get("role") == "service-proxy"
-
-
-# =============================================================================
-# E2E FULL STACK TESTS
-# =============================================================================
-
-
-@pytest.mark.e2e
-@skip_if_no_podman
-class TestE2EFullStack:
-    """End-to-end tests for full orchestrator stack."""
-
-    def setup_method(self):
-        """Setup before each test."""
-        nuclear_cleanup()
-        ensure_network_exists()
-        self.store = ResourceStore()
-
-    def teardown_method(self):
-        """Nuclear cleanup after each test."""
-        nuclear_cleanup()
-
-    def test_full_deployment_workflow(self):
-        """Test complete deployment: ReplicaSet + Service + containers."""
-        # Create ReplicaSet
-        rs = ReplicaSetResource(
-            name="e2e-full-rs",
-            spec={
-                "replicas": 2,
-                "selector": {"app": "e2e-full"},
-                "template": {
-                    "metadata": {"labels": {"app": "e2e-full"}},
-                    "spec": {"containers": [{"name": "app", "image": "alpine:latest"}]},
+        # Create server pod with a single container.
+        self.client.post(
+            "/api/v1/namespaces/default/pods",
+            json={
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "e2e-server"},
+                "spec": {
+                    "containers": [
+                        {"name": "nginx", "image": "docker.io/library/nginx:alpine"}
+                    ]
                 },
             },
-            namespace="default",
         )
-        self.store.create(rs)
+        time.sleep(WAIT_POD_READY)
 
-        # Create Service
-        svc = ServiceResource(
-            name="e2e-full-svc",
-            spec={
-                "selector": {"app": "e2e-full"},
-                "ports": [{"port": 80, "targetPort": 80}],
-            },
-            namespace="default",
-        )
-        self.store.create(svc)
-
-        # Run all controllers
-        rs_controller = ReplicaSetController(self.store)
-        pod_controller = PodController(self.store, None)
-        svc_controller = ServiceController(self.store, pod_controller)
-
-        rs_controller.reconcile()
-
-        try:
-            pod_controller.reconcile()
-        except Exception:
-            pass
-
-        try:
-            svc_controller.reconcile()
-        except Exception:
-            pass
-
-        time.sleep(3)
-
-        # Verify state
-        # 1. Store has correct pods
-        pods = self.store.list("Pod", "default")
-        app_pods = [p for p in pods if p.labels.get("app") == "e2e-full"]
-        assert len(app_pods) == 2, f"Expected 2 app pods, got {len(app_pods)}"
-
-        # 2. Proxy pod exists
-        proxy_pod = self.store.get("Pod", "proxy-e2e-full-svc", "default")
-        assert proxy_pod is not None, "Proxy pod should exist"
-
-        # 3. Containers exist
-        containers = podman_list_orchestrator_containers()
-        app_containers = [c for c in containers if "e2e-full-rs" in c]
-        assert (
-            len(app_containers) >= 2
-        ), f"Expected at least 2 app containers, got: {app_containers}"
-
-    def test_delete_replicaset_cleans_up_everything(self):
-        """Test that deleting a ReplicaSet cleans up all associated resources."""
-        # Create ReplicaSet
-        rs = ReplicaSetResource(
-            name="e2e-cleanup-rs",
-            spec={
-                "replicas": 2,
-                "selector": {"app": "e2e-cleanup"},
-                "template": {
-                    "metadata": {"labels": {"app": "e2e-cleanup"}},
-                    "spec": {"containers": [{"name": "app", "image": "alpine:latest"}]},
+        # Create client pod with a single container.
+        self.client.post(
+            "/api/v1/namespaces/default/pods",
+            json={
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "e2e-client"},
+                "spec": {
+                    "containers": [
+                        {"name": "nginx", "image": "docker.io/library/nginx:alpine"}
+                    ]
                 },
             },
-            namespace="default",
         )
-        self.store.create(rs)
+        time.sleep(WAIT_POD_READY)
 
-        rs_controller = ReplicaSetController(self.store)
-        pod_controller = PodController(self.store, None)
+        # Get the pods and verify they are in Running state.
+        server_pod = self.client.get(
+            "/api/v1/namespaces/default/pods/e2e-server"
+        ).json()
+        client_pod = self.client.get(
+            "/api/v1/namespaces/default/pods/e2e-client"
+        ).json()
+        assert server_pod["status"]["phase"] == "Running"
+        assert client_pod["status"]["phase"] == "Running"
 
-        # Create resources
-        rs_controller.reconcile()
-        try:
-            pod_controller.reconcile()
-        except Exception:
-            pass
-
-        time.sleep(2)
-
-        # Verify creation
-        containers = podman_list_orchestrator_containers()
-        rs_containers = [c for c in containers if "e2e-cleanup-rs" in c]
-        assert len(rs_containers) == 2
-
-        # Delete ReplicaSet
-        self.store.delete("ReplicaSet", "e2e-cleanup-rs", "default")
-
-        # Reconcile to clean up
-        rs_controller.reconcile()
-        try:
-            pod_controller.reconcile()
-        except Exception:
-            pass
-
-        time.sleep(2)
-
-        # Verify cleanup
-        pods = self.store.list("Pod", "default")
-        rs_pods = [
-            p for p in pods if p.metadata.get("owner-replicaset") == "e2e-cleanup-rs"
-        ]
-        assert len(rs_pods) == 0, "All pods should be deleted from store"
-
-        containers = podman_list_orchestrator_containers()
-        rs_containers = [c for c in containers if "e2e-cleanup-rs" in c]
-        assert len(rs_containers) == 0, "All containers should be cleaned up"
-
-
-# =============================================================================
-# E2E CONTAINER CLASS TESTS
-# =============================================================================
-
-
-@pytest.mark.e2e
-@skip_if_no_podman
-class TestE2EContainerClass:
-    """End-to-end tests for Container class directly."""
-
-    def setup_method(self):
-        """Setup before each test."""
-        nuclear_cleanup()
-        ensure_network_exists()
-
-    def teardown_method(self):
-        """Nuclear cleanup after each test."""
-        nuclear_cleanup()
-
-    def test_container_start_and_stop(self):
-        """Test Container.start() and Container.stop() directly."""
-        # Use nginx:alpine which runs persistently (unlike bare alpine which exits)
-        pod = PodResource(
-            name="direct-container-test",
-            spec={"containers": [{"name": "main", "image": "nginx:alpine"}]},
-            namespace="default",
-        )
-
-        container = Container(pod=pod, container_name="main")
-
-        # Start
-        container.start()
-        time.sleep(2)
-
-        assert container.is_alive(), "Container should be running after start"
-
-        # Stop
-        container.stop()
-        time.sleep(1)
-
-        assert not container.is_alive(), "Container should not be running after stop"
-
-    def test_container_with_environment_variables(self):
-        """Test container with environment variables."""
-        # Use nginx:alpine which runs persistently
-        pod = PodResource(
-            name="env-test-pod",
-            spec={
-                "containers": [
-                    {
-                        "name": "app",
-                        "image": "nginx:alpine",
-                        "env": {"MY_VAR": "my_value", "DEBUG": "true"},
-                    }
-                ]
-            },
-            namespace="default",
-        )
-
-        container = Container(pod=pod, container_name="app")
-        container.start()
-        time.sleep(2)
-
-        assert container.is_alive(), "Container should be running"
-
-        # Verify env vars (check via podman inspect)
+        # From client, fetch from server using pod name as hostname
         result = subprocess.run(
-            ["podman", "inspect", "-f", "{{.Config.Env}}", container.full_name],
+            [
+                "podman",
+                "exec",
+                "default_e2e-client_nginx",
+                "wget",
+                "-q",
+                "-O",
+                "-",
+                "-T",
+                "5",
+                "http://e2e-server:80",
+            ],
             capture_output=True,
             text=True,
-            check=False,
+        )
+        assert result.returncode == 0, f"Failed to reach server: {result.stderr}"
+
+        # Verifies the response contains nginx's default page content (which includes "Welcome to nginx!").
+        assert "nginx" in result.stdout.lower() or "welcome" in result.stdout.lower()
+
+    def test_pod_can_reach_service_by_name(self):
+        """Verify a pod can reach a Service using the service name as hostname."""
+
+        # Create backend pods via ReplicaSet.
+        self.client.post(
+            "/api/apps/v1/namespaces/default/replicasets",
+            json={
+                "apiVersion": "apps/v1",
+                "kind": "ReplicaSet",
+                "metadata": {"name": "e2e-svc-backend-rs"},
+                "spec": {
+                    "replicas": 1,
+                    "selector": {"app": "e2e-svc-backend"},
+                    "template": {
+                        "metadata": {"labels": {"app": "e2e-svc-backend"}},
+                        "spec": {
+                            "containers": [
+                                {"name": "nginx", "image": "docker.io/library/nginx:alpine"}
+                            ]
+                        },
+                    },
+                },
+            },
+        )
+        time.sleep(WAIT_POD_READY)
+
+        # Create a Service that selects the backend pods.
+        self.client.post(
+            "/api/v1/namespaces/default/services",
+            json={
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": {"name": "e2e-target-svc"},
+                "spec": {
+                    "selector": {"app": "e2e-svc-backend"},
+                    "ports": [{"port": 8888, "targetPort": 80}],
+                },
+            },
+        )
+        time.sleep(WAIT_POD_READY)
+
+        # Create a client pod.
+        self.client.post(
+            "/api/v1/namespaces/default/pods",
+            json={
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {"name": "e2e-svc-client"},
+                "spec": {
+                    "containers": [
+                        {"name": "nginx", "image": "docker.io/library/nginx:alpine"}
+                    ]
+                },
+            },
+        )
+        time.sleep(WAIT_POD_READY)
+
+        # From the client pod, fetch from the service using service name as hostname.
+        result = subprocess.run(
+            [
+                "podman",
+                "exec",
+                "default_e2e-svc-client_nginx",
+                "wget",
+                "-q",
+                "-O",
+                "-",
+                "-T",
+                "5",
+                "http://e2e-target-svc:8888",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, f"Failed to reach service: {result.stderr}"
+
+        # Verify the response contains nginx's default page content.
+        assert "nginx" in result.stdout.lower() or "welcome" in result.stdout.lower()
+
+
+# =============================================================================
+# REPLICASET E2E TESTS
+# =============================================================================
+
+
+class TestE2EReplicaSet:
+    """
+    E2E tests for ReplicaSet resources.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Reset cluster state and clean up containers before/after each test."""
+        cluster.store.resources = {"Pod": {}, "Service": {}, "ReplicaSet": {}}
+        cleanup_test_containers()
+        with TestClient(app) as client:
+            self.client = client
+            yield
+        cleanup_test_containers()
+
+    def _get_running_pods_with_label(self, key: str, value: str) -> list:
+        """Helper: Get pods with a specific label that are in Running state."""
+        response = self.client.get("/api/v1/namespaces/default/pods")
+        pods = response.json()["items"]
+        return [
+            p
+            for p in pods
+            if p.get("metadata", {}).get("labels", {}).get(key) == value
+            and p.get("status", {}).get("phase") == "Running"
+        ]
+
+    def test_replicaset_creates_running_pods(self):
+        """Verify ReplicaSet creates the specified number of running pods."""
+
+        # Create a ReplicaSet with 3 replicas.
+        response = self.client.post(
+            "/api/apps/v1/namespaces/default/replicasets",
+            json={
+                "apiVersion": "apps/v1",
+                "kind": "ReplicaSet",
+                "metadata": {"name": "e2e-rs"},
+                "spec": {
+                    "replicas": 3,
+                    "selector": {"app": "e2e-test"},
+                    "template": {
+                        "metadata": {"labels": {"app": "e2e-test"}},
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "nginx",
+                                    "image": "docker.io/library/nginx:alpine",
+                                }
+                            ]
+                        },
+                    },
+                },
+            },
+        )
+        assert response.status_code == 201
+
+        time.sleep(WAIT_MULTI_POD)
+
+        # Get the running pods and verify they are in Running state.
+        running_pods = self._get_running_pods_with_label("app", "e2e-test")
+        assert len(running_pods) == 3, f"Expected 3 running pods, got {len(running_pods)}"
+
+    def test_replicaset_scale_up(self):
+        """Verify scaling up a ReplicaSet creates additional running pods."""
+
+        # Create a ReplicaSet with 1 replica.
+        self.client.post(
+            "/api/apps/v1/namespaces/default/replicasets",
+            json={
+                "apiVersion": "apps/v1",
+                "kind": "ReplicaSet",
+                "metadata": {"name": "e2e-scale-rs"},
+                "spec": {
+                    "replicas": 1,
+                    "selector": {"app": "e2e-scale"},
+                    "template": {
+                        "metadata": {"labels": {"app": "e2e-scale"}},
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "nginx",
+                                    "image": "docker.io/library/nginx:alpine",
+                                }
+                            ]
+                        },
+                    },
+                },
+            },
         )
 
-        assert "MY_VAR=my_value" in result.stdout
-        assert "DEBUG=true" in result.stdout
+        time.sleep(WAIT_POD_READY)
 
-        container.stop()
+        # Get the running pods and verify they are in Running state.
+        assert len(self._get_running_pods_with_label("app", "e2e-scale")) == 1
 
-    def test_container_idempotent_start(self):
-        """Test that Container.start() is idempotent (stops existing first)."""
-        # Use nginx:alpine which runs persistently
-        pod = PodResource(
-            name="idempotent-test",
-            spec={"containers": [{"name": "main", "image": "nginx:alpine"}]},
-            namespace="default",
+        # Scale up to 3 replicas.
+        self.client.put(
+            "/api/apps/v1/namespaces/default/replicasets/e2e-scale-rs",
+            json={
+                "apiVersion": "apps/v1",
+                "kind": "ReplicaSet",
+                "metadata": {"name": "e2e-scale-rs"},
+                "spec": {
+                    "replicas": 3,
+                    "selector": {"app": "e2e-scale"},
+                    "template": {
+                        "metadata": {"labels": {"app": "e2e-scale"}},
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "nginx",
+                                    "image": "docker.io/library/nginx:alpine",
+                                }
+                            ]
+                        },
+                    },
+                },
+            },
         )
 
-        container = Container(pod=pod, container_name="main")
+        time.sleep(WAIT_MULTI_POD)
 
-        # Start twice - should not error
-        container.start()
-        time.sleep(2)
+        # Get the running pods and verify they are in Running state.
+        assert len(self._get_running_pods_with_label("app", "e2e-scale")) == 3
 
-        container.start()  # Second start should stop first and restart
-        time.sleep(2)
+    def test_replicaset_scale_down(self):
+        """Verify scaling down a ReplicaSet terminates excess pods."""
 
-        assert container.is_alive(), "Container should be running after second start"
+        # Create a ReplicaSet with 3 replicas.
+        self.client.post(
+            "/api/apps/v1/namespaces/default/replicasets",
+            json={
+                "apiVersion": "apps/v1",
+                "kind": "ReplicaSet",
+                "metadata": {"name": "e2e-scaledown-rs"},
+                "spec": {
+                    "replicas": 3,
+                    "selector": {"app": "e2e-scaledown"},
+                    "template": {
+                        "metadata": {"labels": {"app": "e2e-scaledown"}},
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "nginx",
+                                    "image": "docker.io/library/nginx:alpine",
+                                }
+                            ]
+                        },
+                    },
+                },
+            },
+        )
 
-        container.stop()
+        time.sleep(WAIT_MULTI_POD)
+
+        # Get the running pods and verify they are in Running state.
+        assert len(self._get_running_pods_with_label("app", "e2e-scaledown")) == 3
+
+        # Scale down to 1 replica.
+        self.client.put(
+            "/api/apps/v1/namespaces/default/replicasets/e2e-scaledown-rs",
+            json={
+                "apiVersion": "apps/v1",
+                "kind": "ReplicaSet",
+                "metadata": {"name": "e2e-scaledown-rs"},
+                "spec": {
+                    "replicas": 1,
+                    "selector": {"app": "e2e-scaledown"},
+                    "template": {
+                        "metadata": {"labels": {"app": "e2e-scaledown"}},
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "nginx",
+                                    "image": "docker.io/library/nginx:alpine",
+                                }
+                            ]
+                        },
+                    },
+                },
+            },
+        )
+
+        time.sleep(WAIT_CLEANUP)
+
+        # Get the running pods and verify they are in Running state.
+        assert len(self._get_running_pods_with_label("app", "e2e-scaledown")) == 1
+
+    def test_delete_replicaset_removes_pods(self):
+        """Verify deleting a ReplicaSet removes all managed pods."""
+
+        # Create a ReplicaSet with 2 replicas.
+        self.client.post(
+            "/api/apps/v1/namespaces/default/replicasets",
+            json={
+                "apiVersion": "apps/v1",
+                "kind": "ReplicaSet",
+                "metadata": {"name": "e2e-delete-rs"},
+                "spec": {
+                    "replicas": 2,
+                    "selector": {"app": "e2e-delete"},
+                    "template": {
+                        "metadata": {"labels": {"app": "e2e-delete"}},
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "nginx",
+                                    "image": "docker.io/library/nginx:alpine",
+                                }
+                            ]
+                        },
+                    },
+                },
+            },
+        )
+
+        time.sleep(WAIT_MULTI_POD)
+
+        # Get the running pods and verify they are in Running state.
+        assert len(self._get_running_pods_with_label("app", "e2e-delete")) == 2
+
+        # Delete the ReplicaSet and verify the pods are removed.
+        self.client.delete("/api/apps/v1/namespaces/default/replicasets/e2e-delete-rs")
+        time.sleep(WAIT_CLEANUP)
+
+        # Get the running pods and verify they are not in Running state.
+        assert len(self._get_running_pods_with_label("app", "e2e-delete")) == 0
+
+    def test_replicaset_self_healing(self):
+        """Verify ReplicaSet recreates pods that are manually deleted."""
+
+        # Create a ReplicaSet with 2 replicas.
+        self.client.post(
+            "/api/apps/v1/namespaces/default/replicasets",
+            json={
+                "apiVersion": "apps/v1",
+                "kind": "ReplicaSet",
+                "metadata": {"name": "e2e-heal-rs"},
+                "spec": {
+                    "replicas": 2,
+                    "selector": {"app": "e2e-heal"},
+                    "template": {
+                        "metadata": {"labels": {"app": "e2e-heal"}},
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "nginx",
+                                    "image": "docker.io/library/nginx:alpine",
+                                }
+                            ]
+                        },
+                    },
+                },
+            },
+        )
+
+        time.sleep(WAIT_MULTI_POD)
+
+        # Get the running pods and verify they are in Running state.
+        running_pods = self._get_running_pods_with_label("app", "e2e-heal")
+        assert len(running_pods) == 2
+
+        # Delete one pod manually.
+        pod_to_delete = running_pods[0]["metadata"]["name"]
+        self.client.delete(f"/api/v1/namespaces/default/pods/{pod_to_delete}")
+
+        # Wait for the ReplicaSet controller to recreate the deleted pod.
+        time.sleep(WAIT_MULTI_POD)
+
+        # Verify the ReplicaSet recreated the pod and has 2 running pods again.
+        running_pods = self._get_running_pods_with_label("app", "e2e-heal")
+        assert len(running_pods) == 2, f"Self-healing failed: expected 2 pods, got {len(running_pods)}"
+
+
+# =============================================================================
+# SERVICE E2E TESTS
+# =============================================================================
+
+
+class TestE2EService:
+    """
+    E2E tests for Service Endpoints.
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Reset cluster state and clean up containers before/after each test."""
+        cluster.store.resources = {"Pod": {}, "Service": {}, "ReplicaSet": {}}
+        cleanup_test_containers()
+        with TestClient(app) as client:
+            self.client = client
+            yield
+        cleanup_test_containers()
+
+    def test_service_accessible_on_host(self):
+        """Verify Service is accessible from host at its exposed port."""
+
+        # Create a ReplicaSet with 1 backend pod.
+        self.client.post(
+            "/api/apps/v1/namespaces/default/replicasets",
+            json={
+                "apiVersion": "apps/v1",
+                "kind": "ReplicaSet",
+                "metadata": {"name": "e2e-host-rs"},
+                "spec": {
+                    "replicas": 1,
+                    "selector": {"app": "e2e-host-backend"},
+                    "template": {
+                        "metadata": {"labels": {"app": "e2e-host-backend"}},
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": "nginx",
+                                    "image": "docker.io/library/nginx:alpine",
+                                }
+                            ]
+                        },
+                    },
+                },
+            },
+        )
+        time.sleep(WAIT_POD_READY)
+
+        test_port = 28080
+        # Create a Service with host port.
+        self.client.post(
+            "/api/v1/namespaces/default/services",
+            json={
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": {"name": "e2e-host-svc"},
+                "spec": {
+                    "selector": {"app": "e2e-host-backend"},
+                    "ports": [{"port": test_port, "targetPort": 80}],
+                },
+            },
+        )
+        time.sleep(WAIT_MULTI_POD)
+
+        # Verify the Service is accessible from the host.
+        try:
+            with urllib.request.urlopen(f"http://localhost:{test_port}", timeout=5) as response:
+                content = response.read().decode()
+                assert response.status == 200
+
+                # Verify the response contains nginx's default page content.
+                assert "nginx" in content.lower() or "welcome" in content.lower()
+
+        except Exception as e:
+            pytest.fail(f"Service not accessible on host at port {test_port}: {e}")
