@@ -3,7 +3,6 @@ End-to-End (E2E) Tests for the Mini-K8s Orchestrator.
 """
 
 import pytest
-import subprocess
 import time
 import urllib.request
 
@@ -15,6 +14,7 @@ from conftest import (
     WAIT_CLEANUP,
     cleanup_test_containers,
     requires_podman,
+    podman_exec,
 )
 
 pytestmark = requires_podman
@@ -233,26 +233,14 @@ class TestE2EPod:
         assert client_pod["status"]["phase"] == "Running"
 
         # From client, fetch from server using pod name as hostname
-        result = subprocess.run(
-            [
-                "podman",
-                "exec",
-                "default_e2e-client_nginx",
-                "wget",
-                "-q",
-                "-O",
-                "-",
-                "-T",
-                "5",
-                "http://e2e-server:80",
-            ],
-            capture_output=True,
-            text=True,
+        returncode, stdout, stderr = podman_exec(
+            "default_e2e-client_nginx",
+            ["wget", "-q", "-O", "-", "-T", "5", "http://e2e-server:80"]
         )
-        assert result.returncode == 0, f"Failed to reach server: {result.stderr}"
+        assert returncode == 0, f"Failed to reach server: {stderr}"
 
         # Verifies the response contains nginx's default page content (which includes "Welcome to nginx!").
-        assert "nginx" in result.stdout.lower() or "welcome" in result.stdout.lower()
+        assert "nginx" in stdout.lower() or "welcome" in stdout.lower()
 
     def test_pod_can_reach_service_by_name(self):
         """Verify a pod can reach a Service using the service name as hostname."""
@@ -312,26 +300,14 @@ class TestE2EPod:
         time.sleep(WAIT_POD_READY)
 
         # From the client pod, fetch from the service using service name as hostname.
-        result = subprocess.run(
-            [
-                "podman",
-                "exec",
-                "default_e2e-svc-client_nginx",
-                "wget",
-                "-q",
-                "-O",
-                "-",
-                "-T",
-                "5",
-                "http://e2e-target-svc:8888",
-            ],
-            capture_output=True,
-            text=True,
+        returncode, stdout, stderr = podman_exec(
+            "default_e2e-svc-client_nginx",
+            ["wget", "-q", "-O", "-", "-T", "5", "http://e2e-target-svc:8888"]
         )
-        assert result.returncode == 0, f"Failed to reach service: {result.stderr}"
+        assert returncode == 0, f"Failed to reach service: {stderr}"
 
         # Verify the response contains nginx's default page content.
-        assert "nginx" in result.stdout.lower() or "welcome" in result.stdout.lower()
+        assert "nginx" in stdout.lower() or "welcome" in stdout.lower()
 
 
 # =============================================================================
