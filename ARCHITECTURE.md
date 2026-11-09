@@ -78,7 +78,7 @@ User: POST /api/v1/namespaces/default/pods
    ▼
 5. Container.start() (container.py)
    │
-   ├─► Runs: podman run -d --name default_my-app_container
+   ├─► Runs: podman run -d --name default_my-app_<container-name>
    │         --network orchestrator-net
    │         --network-alias my-app        ← Pod name for DNS
    │         --label managed-by=my-orchestrator
@@ -132,14 +132,17 @@ User: POST /api/apps/v1/namespaces/default/replicasets
 
 ```
 PUT /api/apps/v1/namespaces/default/replicasets/my-rs
-    { "spec": {"replicas": 5} }
-    
+    { full ReplicaSet body, same as POST, with "replicas": 5 }
+    (PUT replaces the whole resource; there is no PATCH endpoint)
+
 ReplicaSetController:
   ├─► desired=5, current=3
-  ├─► Creates my-rs-3, my-rs-4 in store
-  
+  ├─► Creates my-rs-3, my-rs-4 in store (fills the lowest free indices)
+
 PodController:
   ├─► Starts 2 new containers
+
+Scaling down deletes the highest indices first (my-rs-4, then my-rs-3, ...).
 ```
 
 ---
@@ -164,12 +167,13 @@ User: POST /api/v1/namespaces/default/services
    ├─► Finds Service "my-svc" with no proxy pod
    ├─► Creates proxy pod in store:
    │     name: "proxy-my-svc"
+   │     labels: {role: service-proxy, service-name: my-svc}
    │     spec: {
    │       containers: [{
    │         name: "nginx",
    │         image: "nginx:alpine",
-   │         network_aliases: ["web"],  ← From selector value
-   │         ports: [80]                ← For host exposure
+   │         network_aliases: ["my-svc"],  ← The Service name
+   │         ports: [80]                   ← Service port, for host exposure
    │       }]
    │     }
    │
@@ -180,7 +184,7 @@ User: POST /api/v1/namespaces/default/services
    ├─► Starts container:
    │     podman run -d --name default_proxy-my-svc_nginx
    │       --network orchestrator-net
-   │       --network-alias web          ← Service reachable as "web"
+   │       --network-alias my-svc       ← Service reachable as "my-svc"
    │       --network-alias proxy-my-svc
    │       -p 80:80                      ← Host can access localhost:80
    │       nginx:alpine
@@ -205,12 +209,12 @@ User: POST /api/v1/namespaces/default/services
    │         }
    │     }
    │
-   ├─► Injects config into proxy container
-   ├─► Runs: nginx -s reload
+   ├─► Injects config into proxy container (podman exec ... tee /etc/nginx/conf.d/default.conf)
+   ├─► Runs: nginx -s reload (only when the generated config changed)
    │
    ▼
 5. Service is now:
-   - Reachable from pods as: curl http://web:80
+   - Reachable from pods as: curl http://my-svc:80
    - Reachable from host as: curl http://localhost:80
    - Load balances to backend pods
 ```
@@ -255,29 +259,32 @@ Every 1 second, each controller runs reconcile():
 1. Get DESIRED state (from store)
 2. Get ACTUAL state (from podman ps)
 3. Compare and fix:
-   - Orphaned containers? → Stop them
+   - Orphaned containers? → Remove them (podman rm -f)
    - Missing containers? → Start them
-   - Stopped containers? → Restart them
-   - Spec changed (hash)? → Recreate them
+   - Stopped containers? → Recreate them (podman rm -f, then podman run)
+   - Spec changed (hash)? → Remove them; the next loop starts them with the new spec
 ```
 
 ### ReplicaSetController.reconcile()
 
 ```
-1. For each ReplicaSet:
-   - Count pods matching selector
+1. Delete pods whose owner ReplicaSet no longer exists (cascade delete)
+2. For each ReplicaSet:
+   - Count pods matching the selector AND owned by this RS (metadata.owner-replicaset)
    - Too few? → Create pods in store
-   - Too many? → Delete pods from store
-2. PodController will handle actual containers
+   - Too many? → Delete pods from store (highest indices first)
+   - Template changed? → Update owned pods' spec and hash in store
+3. PodController will handle actual containers
 ```
 
 ### ServiceController.reconcile()
 
 ```
-1. Ensure proxy pod exists in store
-2. Find backend pods by selector
-3. Update nginx config with backend IPs
-4. Reload nginx
+1. Delete proxy pods whose Service no longer exists
+2. Ensure proxy pod exists in store
+3. Find running backend containers by selector, get their IPs (podman inspect)
+4. Update nginx config with backend IPs
+5. Reload nginx, only if the config differs from the last one injected
 ```
 
 ---
@@ -355,6 +362,5 @@ src/
 ├── store.py         # ResourceStore - thread-safe in-memory storage
 ├── resources.py     # Resource definitions (Pod, Service, ReplicaSet)
 ├── controllers.py   # Reconciliation controllers
-├── container.py     # Podman container wrapper
-└── api.py           # (Legacy) Internal API helpers
+└── container.py     # Podman container wrapper
 ```

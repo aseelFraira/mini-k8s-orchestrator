@@ -1,6 +1,6 @@
 # Test Suite Overview
 
-Total: **109 tests** across 6 test files.
+Total: **116 tests** across 7 test files.
 
 ---
 
@@ -19,7 +19,7 @@ Unit tests for ReplicaSet and Service controllers (no Podman).
 
 ### TestReplicaSetControllerOrphanCleanup
 - `test_cleans_up_orphaned_pods_when_rs_deleted` — Deleting RS removes all its owned pods
-- `test_does_not_delete_pods_without_owner` — Orphan cleanup ignores pods with no ownerRef
+- `test_does_not_delete_pods_without_owner` — Orphan cleanup ignores pods with no `owner-replicaset`
 
 ### TestReplicaSetControllerSpecChanges
 - `test_scale_up_replica_count` — Updating RS from 2→4 replicas creates 2 new pods
@@ -29,7 +29,7 @@ Unit tests for ReplicaSet and Service controllers (no Podman).
 - `test_multiple_reconciles_no_change` — Running reconcile twice with no changes produces same state
 
 ### TestServiceControllerProxyPod
-- `test_creates_proxy_pod_for_service` — Service creates a proxy pod named `{svc-name}-proxy`
+- `test_creates_proxy_pod_for_service` — Service creates a proxy pod named `proxy-{svc-name}` with labels `role=service-proxy` and `service-name`
 - `test_proxy_pod_uses_nginx_image` — Proxy pod uses nginx:alpine image for load balancing
 
 ### TestServiceControllerOrphanCleanup
@@ -42,6 +42,28 @@ Unit tests for ReplicaSet and Service controllers (no Podman).
 
 ---
 
+## test_controllers_mock.py (7 tests)
+PodController and controller coordination against `MockPodmanRuntime`, which patches `subprocess.run` with a fake container table, a command log, and failure injection (no Podman).
+
+### TestPodControllerReconcile
+- `test_creates_container_for_new_pod` — Pod in store with no container gets `default_{pod}_{container}` created
+- `test_deletes_orphan_container` — Managed container with no matching pod in store is removed
+- `test_recreates_container_on_spec_drift` — Container whose `pod-hash-number` label doesn't match the pod's hash is recreated
+
+### TestPodControllerIdempotency
+- `test_no_action_when_synced` — 5 extra reconciles on a synced state issue no new `podman run` commands
+
+### TestCascadingReconciliation
+- `test_rs_creates_pods_for_service` — RS creates pods with the Service's labels; ServiceController creates `proxy-{svc-name}`
+
+### TestPartialReconcileFailure
+- `test_store_reflects_partial_state_on_failure` — `podman run` fails for one of 3 pods; the others still get containers
+
+### TestControllerCoordination
+- `test_full_reconciliation_cycle` — All three controllers together: RS creates pods, Service creates its proxy, PodController starts containers
+
+---
+
 ## test_podman.py (12 tests)
 Podman integration tests (requires real Podman).
 
@@ -50,11 +72,11 @@ Podman integration tests (requires real Podman).
 - `test_delete_pod_removes_podman_container` — Deleting a pod stops and removes the container
 
 ### TestContainerLabels
-- `test_container_has_managed_by_label` — Container has `managed-by=mini-orchestrator` label
-- `test_container_has_pod_name_label` — Container has `pod-name={name}` label for tracking
+- `test_container_has_managed_by_label` — Container has `managed-by=my-orchestrator` label
+- `test_container_has_pod_name_label` — Container has `orchestrator-pod-name={name}` label for tracking
 
 ### TestContainerNetworking
-- `test_container_on_orchestrator_network` — Container joins the `orchestrator-network` bridge
+- `test_container_on_orchestrator_network` — Container joins the `orchestrator-net` bridge network
 
 ### TestReconciliation
 - `test_stopped_container_is_restarted` — Controller restarts a manually stopped container
@@ -83,7 +105,7 @@ Integration tests for API/store consistency and controller coordination.
 
 ### TestReplicaSetControllerIntegration
 - `test_replicaset_pod_naming_convention` — RS pods follow `{rs-name}-{index}` naming
-- `test_replicaset_owner_references` — RS pods have correct ownerReferences metadata
+- `test_replicaset_owner_references` — RS pods have correct `owner-replicaset` metadata
 
 ### TestServiceControllerIntegration
 - `test_service_tracks_ready_backends` — Service status shows count of ready backend pods
@@ -105,13 +127,13 @@ End-to-end tests with real Podman containers.
 - `test_pod_with_environment_variables` — Env vars from spec are set inside container
 - `test_pod_labels_preserved` — Pod metadata.labels are queryable via API
 - `test_delete_pod_stops_container` — DELETE removes pod and stops Podman container
-- `test_pods_can_reach_each_other_by_name` — Pod A can ping Pod B using DNS name
-- `test_pod_can_reach_service_by_name` — Pod can curl service by its DNS name
+- `test_pods_can_reach_each_other_by_name` — Pod A fetches a page from Pod B by pod name (`wget` inside the container)
+- `test_pod_can_reach_service_by_name` — Pod fetches a page through a Service by its name (`wget` inside the container)
 
 ### TestE2EReplicaSet
 - `test_replicaset_creates_running_pods` — RS creates N running pods with containers
-- `test_replicaset_scale_up` — PATCH to increase replicas creates new pods
-- `test_replicaset_scale_down` — PATCH to decrease replicas removes excess pods
+- `test_replicaset_scale_up` — PUT with more replicas creates new pods
+- `test_replicaset_scale_down` — PUT with fewer replicas removes excess pods
 - `test_delete_replicaset_removes_pods` — DELETE RS cascades to all owned pods
 - `test_replicaset_self_healing` — Manually deleting a pod triggers RS to recreate it
 
@@ -129,8 +151,8 @@ Unit tests for ResourceStore.
 - `test_get_nonexistent_returns_none` — Getting unknown name returns None
 - `test_list_empty` — List on empty store returns empty list
 - `test_list_returns_all` — List returns all stored resources
-- `test_update_existing` — Update modifies stored resource in place
-- `test_update_nonexistent_raises_error` — Updating unknown name raises KeyError
+- `test_update_existing` — Update replaces the stored resource
+- `test_update_nonexistent_raises_error` — Updating unknown name raises ValueError
 - `test_delete_existing` — Delete removes resource, returns True
 - `test_delete_nonexistent_returns_false` — Deleting unknown name returns False
 - `test_create_or_update_creates` — Upsert creates if not exists
@@ -188,7 +210,7 @@ Unit tests for resource models (Pod, Service, ReplicaSet).
 - `test_service_type_custom` — Custom type (NodePort, LoadBalancer) is stored
 
 ### TestServiceProxyPodSpec
-- `test_proxy_pod_spec_structure` — `.proxy_pod_spec()` returns valid pod spec
+- `test_proxy_pod_spec_structure` — `.proxy_pod_spec` returns valid pod spec
 - `test_proxy_pod_spec_network_aliases` — Proxy has service name as network alias
 - `test_proxy_pod_spec_ports` — Proxy exposes correct port mappings
 
@@ -200,14 +222,14 @@ Unit tests for resource models (Pod, Service, ReplicaSet).
 - `test_replicas_property` — `.replicas` returns spec.replicas count
 - `test_replicas_default_one` — Missing replicas defaults to 1
 - `test_replicas_zero` — Zero replicas is valid (scale to 0)
-- `test_selector_property` — `.selector` returns spec.selector.matchLabels
+- `test_selector_property` — `.selector` returns spec.selector
 - `test_selector_missing_raises_error` — Missing selector raises ValueError
 - `test_template_property` — `.template` returns spec.template pod template
 - `test_template_missing_raises_error` — Missing template raises ValueError
 
 ### TestReplicaSetResourceValidation
 - `test_negative_replicas_raises_error` — Negative replicas raises ValueError
-- `test_non_integer_replicas_raises_error` — Non-integer replicas raises TypeError
+- `test_non_integer_replicas_raises_error` — Non-integer replicas raises ValueError
 
 ---
 
@@ -223,8 +245,8 @@ uv run pytest tests/test_controllers.py
 # Run with verbose output
 uv run pytest -v
 
-# Run only unit tests (no Podman)
-uv run pytest tests/test_controllers.py tests/test_store.py tests/test_resources.py
+# Run only tests that don't need Podman
+uv run pytest tests/test_controllers.py tests/test_controllers_mock.py tests/test_store.py tests/test_resources.py
 
 # Run Podman tests (requires Podman)
 uv run pytest tests/test_podman.py tests/test_e2e.py tests/test_integration.py
